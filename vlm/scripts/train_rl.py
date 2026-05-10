@@ -5,7 +5,7 @@ from vlm.utils.training import set_seed
 set_seed(42)
 
 
-EXPERIMENT_NAME = "donut-tinyllama-sft-rl"
+EXPERIMENT_NAME = "donut-tinyllama"
 
 if __name__ == "__main__":
     cfg = get_experiment(EXPERIMENT_NAME)
