@@ -10,12 +10,11 @@ class Projector(nn.Module):
     def __init__(self, vis_dim: int, llm_dim: int):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(vis_dim, llm_dim),
+            nn.Linear(vis_dim, llm_dim*3),
             nn.GELU(),
-            nn.Linear(llm_dim, llm_dim),
+            nn.Linear(llm_dim*3, llm_dim),
             nn.LayerNorm(llm_dim),
         )
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_dtype = x.dtype
