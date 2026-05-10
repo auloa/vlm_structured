@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from PIL import Image
-from transformers import AutoImageProcessor, VisionEncoderDecoderModel
+from transformers import AutoImageProcessor, VisionEncoderDecoderModel, DonutProcessor
 
 
 class DonutVisionEncoder(nn.Module):
