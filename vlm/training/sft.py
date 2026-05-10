@@ -30,6 +30,7 @@ def train_sft(
     learning_rate: float,
     weight_decay: float,
     grad_accum_steps: int,
+    grad_clip_norm: float,
     max_target_length: int,
     log_every: int,
     sample_every: int,
@@ -56,6 +57,8 @@ def train_sft(
     )
 
     tokenizer = model.lm.tokenizer
+
+    tokenizer.padding_side = "right"
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -167,6 +170,11 @@ def train_sft(
 
             output_loss: torch.Tensor = output.loss
 
+            if torch.isnan(output_loss) or torch.isinf(output_loss):
+                print(f"warning: invalid SFT loss at batch {step}; skipping")
+                optimizer.zero_grad(set_to_none=True)
+                continue
+
             # Scale loss for gradient accumulation.
             loss = output_loss / grad_accum_steps
             loss.backward()
@@ -180,7 +188,7 @@ def train_sft(
             if should_step or is_last_batch:
                 torch.nn.utils.clip_grad_norm_(
                     model.projector.parameters(),
-                    max_norm=1.0,
+                    max_norm=grad_clip_norm,
                 )
 
                 optimizer.step()

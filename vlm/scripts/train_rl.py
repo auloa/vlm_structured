@@ -24,6 +24,7 @@ if __name__ == "__main__":
         weight_decay=cfg.rl.weight_decay,
         temperature=cfg.rl.temperature,
         max_completion_tokens=cfg.rl.max_completion_tokens,
+        grad_clip_norm=cfg.rl.grad_clip_norm,
         kl_coef=cfg.rl.kl_coef,
         log_every=cfg.rl.log_every,
         sample_every=cfg.rl.sample_every,

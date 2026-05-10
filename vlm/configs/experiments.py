@@ -30,14 +30,21 @@ def donut_tinyllama_sft_rl() -> ExperimentConfig:
     cfg.vision.image_height = 640
     cfg.vision.image_width = 960
 
+    cfg.sft.max_target_length = 192
+
     cfg.sft.epochs = 2
     cfg.sft.batch_size = 4
     cfg.sft.grad_accum_steps = 4
 
     cfg.rl.epochs = 1
+    cfg.rl.max_target_length = 192
+    cfg.rl.temperature = 0.7
+    cfg.rl.kl_coeff = 0.02
     cfg.rl.completions_per_image = 4
 
     return cfg
+
+
 
 
 EXPERIMENTS = {

@@ -26,6 +26,7 @@ if __name__ == "__main__":
         learning_rate=cfg.sft.learning_rate,
         weight_decay=cfg.sft.weight_decay,
         grad_accum_steps=cfg.sft.grad_accum_steps,
+        grad_clip_norm=cfg.sft.grad_clip_norm,
         max_target_length=cfg.sft.max_target_length,
         log_every=cfg.sft.log_every,
         sample_every=cfg.sft.sample_every,

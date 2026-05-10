@@ -60,10 +60,12 @@ def generate_k_outputs(
             "eos_token_id": tokenizer.eos_token_id,
             "use_cache": True,
             "return_dict_in_generate": True,
+            "repetition_penalty": 1.1,
         }
 
         if do_sample:
             generate_kwargs["temperature"] = temperature
+            generate_kwargs["top_p"] = 0.95
 
         output = model.lm.model.generate(**generate_kwargs)
 

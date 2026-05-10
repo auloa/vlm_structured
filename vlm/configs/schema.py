@@ -37,21 +37,22 @@ class SFTConfig:
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
     grad_accum_steps: int = 4
-    max_target_length: int = 256
+    grad_clip_norm: float = 0.5
+    max_target_length: int = 192
     log_every: int = 10
-    sample_every: int = 10
+    sample_every: int = 50
 
 
 @dataclass
 class RLConfig:
-    epochs: int = 2
+    epochs: int = 1
     completions_per_image: int = 4
     learning_rate: float = 5e-6
     weight_decay: float = 0.01
-    temperature: float = 0.8
-    max_completion_tokens: int = 256
-    kl_coef: float = 0.01
-    clip_eps: float = 0.2
+    temperature: float = 0.7
+    max_completion_tokens: int = 192
+    grad_clip_norm: float = 0.5
+    kl_coef: float = 0.02
     log_every: int = 5
     sample_every: int = 20
 

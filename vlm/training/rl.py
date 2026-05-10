@@ -31,6 +31,7 @@ def train_rl(
     weight_decay: float,
     temperature: float,
     max_completion_tokens: int,
+    grad_clip_norm: float,
     kl_coef: float,
     log_every: int,
     sample_every: int,
@@ -96,6 +97,8 @@ def train_rl(
     print(f"dataset ready: {len(dataset)} samples")
 
     tokenizer = model.lm.tokenizer
+
+    tokenizer.padding_side = "right"
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -247,12 +250,21 @@ def train_rl(
             # ------------------------------------------------------------
             # 6. Projector-only optimization step.
             # ------------------------------------------------------------
+            if torch.isnan(loss) or torch.isinf(loss) or loss.abs() > 100:
+                print(
+                    f"warning: invalid RL loss at step {global_step}; "
+                    f"loss={loss.item() if torch.isfinite(loss) else loss}"
+                )
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+                continue
+
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(
                 model.projector.parameters(),
-                max_norm=1.0,
+                max_norm=grad_clip_norm,
             )
 
             optimizer.step()
@@ -360,17 +372,14 @@ def compute_completion_token_log_probs(
     """
     Compute token log-probs for sampled completions.
 
-    This scores generated completions under:
+    Scores all completion tokens, including the first generated token.
 
-        visual prefix + instruction prefix + completion prefix
+    Layout:
+        inputs: visual + prompt + completion[:-1]
+        targets: completion
 
-    The projector can be either:
-        - current trainable projector
-        - frozen reference projector
-
-    Returns:
-        token_log_probs: [K, T]
-        target_mask:     [K, T]
+    The final prompt position predicts completion[0].
+    Completion positions predict the following completion tokens.
     """
 
     device = model.device
@@ -387,19 +396,25 @@ def compute_completion_token_log_probs(
     )
 
     completion_ids = tokens["input_ids"].to(device)
-    completion_mask = tokens["attention_mask"].to(device)
+    completion_mask = tokens["attention_mask"].to(device).float()
 
-    if completion_ids.shape[1] < 2:
+    if completion_ids.shape[1] < 1:
         return (
             torch.zeros(k, 1, device=device),
             torch.zeros(k, 1, device=device),
         )
 
-    # Teacher forcing:
-    # input token sequence predicts the next token.
-    input_ids = completion_ids[:, :-1]
-    target_ids = completion_ids[:, 1:]
-    target_mask = completion_mask[:, 1:].float()
+    # Feed all but the final completion token.
+    # The final prompt token predicts completion_ids[:, 0].
+    if completion_ids.shape[1] > 1:
+        completion_input_ids = completion_ids[:, :-1]
+        completion_input_mask = completion_mask[:, :-1].long()
+    else:
+        completion_input_ids = completion_ids[:, :0]
+        completion_input_mask = completion_mask[:, :0].long()
+
+    target_ids = completion_ids
+    target_mask = completion_mask
 
     visual_embeds = get_visual_embeddings_with_projector(
         model=model,
@@ -422,10 +437,21 @@ def compute_completion_token_log_probs(
     prompt_ids = prompt_ids.expand(k, -1)
     prompt_mask = prompt_mask.expand(k, -1)
 
-    # Frozen token embeddings. We do not need gradients into the embedding table.
     with torch.no_grad():
         prompt_embeds = model.lm.model.get_input_embeddings()(prompt_ids).float()
-        completion_embeds = model.lm.model.get_input_embeddings()(input_ids).float()
+
+        if completion_input_ids.shape[1] > 0:
+            completion_embeds = model.lm.model.get_input_embeddings()(
+                completion_input_ids
+            ).float()
+        else:
+            completion_embeds = torch.empty(
+                k,
+                0,
+                prompt_embeds.shape[-1],
+                device=device,
+                dtype=prompt_embeds.dtype,
+            )
 
     inputs_embeds = torch.cat(
         [visual_embeds, prompt_embeds, completion_embeds],
@@ -442,7 +468,7 @@ def compute_completion_token_log_probs(
     )
 
     attention_mask = torch.cat(
-        [visual_mask, prompt_mask, completion_mask[:, :-1]],
+        [visual_mask, prompt_mask, completion_input_mask],
         dim=1,
     )
 
@@ -460,13 +486,15 @@ def compute_completion_token_log_probs(
 
     logits = outputs.logits
 
-    prompt_len = visual_embeds.shape[1] + prompt_embeds.shape[1]
+    visual_len = visual_embeds.shape[1]
+    prompt_len = prompt_embeds.shape[1]
 
-    completion_logits = logits[
-        :,
-        prompt_len : prompt_len + target_ids.shape[1],
-        :,
-    ]
+    # The token at index visual_len + prompt_len - 1 predicts the first
+    # completion token.
+    start = visual_len + prompt_len - 1
+    end = start + target_ids.shape[1]
+
+    completion_logits = logits[:, start:end, :]
 
     log_probs = F.log_softmax(completion_logits, dim=-1)
 
@@ -563,6 +591,32 @@ def _log_metrics(
     writer.add_scalar("rl/mean_reward", mean_reward, global_step)
     writer.add_scalar("rl/json_valid_rate", json_valid_rate, global_step)
     writer.add_scalar("rl/schema_rate", schema_rate, global_step)
+
+    writer.add_scalar(
+        "rl/reward_json_like",
+        sum(b.json_like for b in breakdowns) / max(1, len(breakdowns)),
+        global_step,
+    )
+    writer.add_scalar(
+        "rl/reward_line_items_populated",
+        sum(b.line_items_populated for b in breakdowns) / max(1, len(breakdowns)),
+        global_step,
+    )
+    writer.add_scalar(
+        "rl/reward_content",
+        sum(b.content for b in breakdowns) / max(1, len(breakdowns)),
+        global_step,
+    )
+    writer.add_scalar(
+        "rl/reward_anti_hallucination",
+        sum(b.anti_hallucination for b in breakdowns) / max(1, len(breakdowns)),
+        global_step,
+    )
+    writer.add_scalar(
+        "rl/reward_total_match",
+        sum(b.total_match for b in breakdowns) / max(1, len(breakdowns)),
+        global_step,
+    )
 
     if not skipped:
         writer.add_scalar("rl/policy_loss", policy_loss.item(), global_step)

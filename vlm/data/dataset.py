@@ -56,6 +56,7 @@ class CORDDataset(Dataset):
         tokenizer: PreTrainedTokenizerBase | None = None,
         max_target_length: int | None = None,
     ):
+
         raw = load_dataset(dataset_name, split=split)
 
         candidates: list[dict[str, Any]] = []
@@ -67,24 +68,19 @@ class CORDDataset(Dataset):
         for idx in range(len(raw)):
             item = cast(CORDRow, raw[idx])
             image = item["image"].convert("RGB")
-
             try:
                 parsed = parse_ground_truth(item["ground_truth"])
             except RuntimeError:
                 self.num_parse_failed += 1
                 continue
-
             label = json.dumps(parsed, ensure_ascii=False)
-
             if tokenizer is not None and max_target_length is not None:
                 eos = tokenizer.eos_token or ""
                 tokenized = tokenizer(
                     label + eos,
                     add_special_tokens=False,
                 )
-
                 target_len = len(tokenized["input_ids"])
-
                 if target_len > max_target_length:
                     self.num_too_long += 1
                     continue
@@ -93,7 +89,6 @@ class CORDDataset(Dataset):
 
             width, height = image.size
             area = width * height
-
             candidates.append(
                 {
                     "image": image,
