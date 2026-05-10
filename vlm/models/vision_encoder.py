@@ -19,7 +19,7 @@ class DonutVisionEncoder(nn.Module):
 
         if default_processor:
             self.processor = DonutProcessor.from_pretrained(model_name)
-            self.processor = processor.image_processor
+            self.processor = self.processor.image_processor
         else:
             self.processor = DonutProcessor.from_pretrained(model_name)
             self.processor.image_processor.size = {
@@ -27,7 +27,7 @@ class DonutVisionEncoder(nn.Module):
                     "width": img_shape[1],
                 }
             self.processor.image_processor.do_align_long_axis = False
-            self.processor = processor.image_processor
+            self.processor = self.processor.image_processor
 
         self.model_dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
 
