@@ -7,7 +7,7 @@ from transformers import AutoImageProcessor, VisionEncoderDecoderModel, DonutPro
 class DonutVisionEncoder(nn.Module):
     def     __init__(
         self,
-        model_name: str = "naver-clova-ix/donut-base",
+        model_name: str = "naver-clova-ix/donut-base-finetuned-cord-v2",
         device: torch.device | None = None,
         default_processor: bool = False,
         img_shape: tuple[int, int] = (640, 960),
