@@ -24,7 +24,6 @@ if __name__ == "__main__":
         temperature=cfg.rl.temperature,
         max_completion_tokens=cfg.rl.max_completion_tokens,
         kl_coef=cfg.rl.kl_coef,
-        clip_eps=cfg.rl.clip_eps,
         log_every=cfg.rl.log_every,
         sample_every=cfg.rl.sample_every,
         sft_checkpoint_path=cfg.sft_best_checkpoint,

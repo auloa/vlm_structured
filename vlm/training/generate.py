@@ -42,7 +42,7 @@ def generate_k_outputs(
     generate_kwargs = {
         "inputs_embeds": None,
         "attention_mask": None,
-        "max_completion_tokens": max_completion_tokens,
+        "max_new_tokens": max_completion_tokens,
         "do_sample": do_sample,
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": tokenizer.eos_token_id,

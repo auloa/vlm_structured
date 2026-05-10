@@ -32,7 +32,6 @@ def train_rl(
     temperature: float,
     max_completion_tokens: int,
     kl_coef: float,
-    clip_eps: float,
     log_every: int,
     sample_every: int,
     sft_checkpoint_path: str | Path,
@@ -44,6 +43,11 @@ def train_rl(
     print(f"device: {device}")
 
     set_seed(42)
+
+    assert completions_per_image >= 2, (
+        "completions_per_image must be >= 2 because this RL loop uses "
+        "group-relative advantages."
+    )
 
     run_dir = Path(run_dir)
     checkpoint_dir = Path(checkpoint_dir)
@@ -59,13 +63,27 @@ def train_rl(
         lm_name=lm_name,
     )
 
-    assert_only_projector_trainable(model)
-
     ckpt = torch.load(sft_checkpoint_path, map_location=device)
     model.projector.load_state_dict(ckpt["projector_state_dict"])
     print(f"loaded SFT checkpoint: {sft_checkpoint_path}")
 
-    # Frozen SFT projector used as the KL reference policy.
+    # Freeze base model explicitly.
+    for p in model.vision_encoder.parameters():
+        p.requires_grad_(False)
+
+    for p in model.lm.model.parameters():
+        p.requires_grad_(False)
+
+    for p in model.projector.parameters():
+        p.requires_grad_(True)
+
+    # Frozen modules should stay in eval mode.
+    model.vision_encoder.eval()
+    model.lm.model.eval()
+
+    assert_only_projector_trainable(model)
+
+    # Frozen SFT projector used as KL/reference policy.
     ref_projector = clone_reference_projector(model.projector)
 
     print("loading dataset...")
@@ -73,14 +91,14 @@ def train_rl(
         split=train_split,
         max_samples=train_samples,
         dataset_name=dataset_name,
-
     )
 
-    print(
-        f"dataset ready: {len(dataset)} samples "
-    )
+    print(f"dataset ready: {len(dataset)} samples")
 
     tokenizer = model.lm.tokenizer
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     loader = DataLoader(
         dataset,
@@ -111,21 +129,32 @@ def train_rl(
             image = sample["image"][0]
             ground_truth = sample["label"][0]
 
-            # Generate multiple completions from the current policy.
+            # ------------------------------------------------------------
+            # 1. Generate K completions from the current policy.
+            # ------------------------------------------------------------
             model.projector.eval()
-            gen = generate_k_outputs(
-                model=model,
-                image=image,
-                tokenizer=tokenizer,
-                instruction=instruction,
-                k=completions_per_image,
-                max_completion_tokens=max_completion_tokens,
-                temperature=temperature,
-                do_sample=True,
-            )
+
+            with torch.no_grad():
+                gen = generate_k_outputs(
+                    model=model,
+                    image=image,
+                    tokenizer=tokenizer,
+                    instruction=instruction,
+                    k=completions_per_image,
+                    max_completion_tokens=max_completion_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                )
+
             model.projector.train()
 
-            breakdowns = [compute_reward(text, ground_truth) for text in gen.texts]
+            # ------------------------------------------------------------
+            # 2. Compute rewards for sampled completions.
+            # ------------------------------------------------------------
+            breakdowns = [
+                compute_reward(text, ground_truth)
+                for text in gen.texts
+            ]
 
             rewards = torch.tensor(
                 [b.total for b in breakdowns],
@@ -135,24 +164,53 @@ def train_rl(
 
             epoch_rewards.extend(rewards.tolist())
 
-            # Group-normalized advantage, GRPO-style.
+            # ------------------------------------------------------------
+            # 3. Group-relative advantages.
+            # ------------------------------------------------------------
+            reward_mean = rewards.mean()
             reward_std = rewards.std(unbiased=False)
-            advantages = (rewards - rewards.mean()) / (reward_std + 1e-8)
 
+            advantages = (rewards - reward_mean) / (reward_std + 1e-8)
 
+            # If all completions receive the same reward, there is no
+            # useful preference signal for this image. Skip the update.
+            if torch.allclose(
+                advantages,
+                torch.zeros_like(advantages),
+                atol=1e-6,
+            ):
+                global_step += 1
+
+                if global_step % log_every == 0:
+                    _log_metrics(
+                        writer=writer,
+                        global_step=global_step,
+                        rewards=rewards,
+                        breakdowns=breakdowns,
+                        policy_loss=None,
+                        kl_loss=None,
+                        loss=None,
+                        step=step,
+                        total_steps=len(loader),
+                        skipped=True,
+                    )
+
+                if global_step % sample_every == 0:
+                    _log_sample(
+                        gen=gen,
+                        rewards=rewards,
+                        ground_truth=ground_truth,
+                        global_step=global_step,
+                        writer=writer,
+                    )
+
+                continue
+
+            # ------------------------------------------------------------
+            # 4. Score completions under frozen SFT reference projector.
+            # ------------------------------------------------------------
             with torch.no_grad():
-                old_token_log_probs, token_mask = compute_completion_token_log_probs(
-                    model=model,
-                    image=image,
-                    completions=gen.texts,
-                    tokenizer=tokenizer,
-                    instruction=instruction,
-                    projector=model.projector,
-                    max_completion_length=max_completion_tokens,
-                    require_grad=False,
-                )
-
-                ref_token_log_probs, _ = compute_completion_token_log_probs(
+                ref_token_log_probs, token_mask = compute_completion_token_log_probs(
                     model=model,
                     image=image,
                     completions=gen.texts,
@@ -163,10 +221,11 @@ def train_rl(
                     require_grad=False,
                 )
 
-            # current_token_log_probs:
-            #   current projector with gradient enabled.
+            # ------------------------------------------------------------
+            # 5. Score completions under current projector with gradients.
+            # ------------------------------------------------------------
             with get_autocast(device):
-                current_token_log_probs, token_mask = compute_completion_token_log_probs(
+                policy_token_log_probs, token_mask = compute_completion_token_log_probs(
                     model=model,
                     image=image,
                     completions=gen.texts,
@@ -177,16 +236,17 @@ def train_rl(
                     require_grad=True,
                 )
 
-                loss, policy_loss, kl_loss, clip_fraction = compute_grpo_loss(
-                    current_token_log_probs=current_token_log_probs,
-                    old_token_log_probs=old_token_log_probs,
+                loss, policy_loss, kl_loss = compute_pg_kl_loss(
+                    policy_token_log_probs=policy_token_log_probs,
                     ref_token_log_probs=ref_token_log_probs,
                     token_mask=token_mask,
                     advantages=advantages,
-                    clip_eps=clip_eps,
                     beta=kl_coef,
                 )
 
+            # ------------------------------------------------------------
+            # 6. Projector-only optimization step.
+            # ------------------------------------------------------------
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
 
@@ -198,6 +258,9 @@ def train_rl(
             optimizer.step()
             global_step += 1
 
+            # ------------------------------------------------------------
+            # 7. Logging.
+            # ------------------------------------------------------------
             if global_step % log_every == 0:
                 _log_metrics(
                     writer=writer,
@@ -206,10 +269,10 @@ def train_rl(
                     breakdowns=breakdowns,
                     policy_loss=policy_loss,
                     kl_loss=kl_loss,
-                    clip_fraction=clip_fraction,
                     loss=loss,
                     step=step,
                     total_steps=len(loader),
+                    skipped=False,
                 )
 
             if global_step % sample_every == 0:
@@ -240,7 +303,6 @@ def train_rl(
                 mean_reward=mean_epoch_reward,
                 checkpoint_path=best_checkpoint_path,
                 completions_per_image=completions_per_image,
-                clip_eps=clip_eps,
                 kl_coef=kl_coef,
             )
 
@@ -267,7 +329,11 @@ def get_visual_embeddings_with_projector(
     projector,
     require_grad: bool,
 ) -> torch.Tensor:
-    """Encode image with frozen vision encoder, then apply selected projector."""
+    """
+    Encode image with frozen vision encoder, then apply selected projector.
+
+    Gradients flow only through the projector when require_grad=True.
+    """
 
     with torch.no_grad():
         visual_features = model.vision_encoder([image])
@@ -291,14 +357,20 @@ def compute_completion_token_log_probs(
     max_completion_length: int = 128,
     require_grad: bool = True,
 ):
-    """Compute token log-probs for sampled completions.
+    """
+    Compute token log-probs for sampled completions.
 
     This scores generated completions under:
+
         visual prefix + instruction prefix + completion prefix
 
     The projector can be either:
         - current trainable projector
         - frozen reference projector
+
+    Returns:
+        token_log_probs: [K, T]
+        target_mask:     [K, T]
     """
 
     device = model.device
@@ -324,7 +396,7 @@ def compute_completion_token_log_probs(
         )
 
     # Teacher forcing:
-    # input predicts the next token.
+    # input token sequence predicts the next token.
     input_ids = completion_ids[:, :-1]
     target_ids = completion_ids[:, 1:]
     target_mask = completion_mask[:, 1:].float()
@@ -350,6 +422,7 @@ def compute_completion_token_log_probs(
     prompt_ids = prompt_ids.expand(k, -1)
     prompt_mask = prompt_mask.expand(k, -1)
 
+    # Frozen token embeddings. We do not need gradients into the embedding table.
     with torch.no_grad():
         prompt_embeds = model.lm.model.get_input_embeddings()(prompt_ids).float()
         completion_embeds = model.lm.model.get_input_embeddings()(input_ids).float()
@@ -407,47 +480,62 @@ def compute_completion_token_log_probs(
     return token_log_probs, target_mask
 
 
-def compute_grpo_loss(
-    current_token_log_probs,
-    old_token_log_probs,
+def compute_pg_kl_loss(
+    policy_token_log_probs,
     ref_token_log_probs,
     token_mask,
     advantages,
-    clip_eps: float,
     beta: float,
 ):
-    """GRPO/PPO-style clipped policy loss with KL to SFT reference projector."""
+    """
+    Group-relative policy-gradient loss with KL regularization.
 
-    advantages = advantages.detach().unsqueeze(1)
+    Args:
+        policy_token_log_probs: [K, T]
+        ref_token_log_probs:    [K, T]
+        token_mask:             [K, T]
+        advantages:             [K]
+        beta:                   KL coefficient
 
-    log_ratio = current_token_log_probs - old_token_log_probs
-    ratio = torch.exp(log_ratio)
+    The policy-gradient term increases the likelihood of above-average
+    completions and decreases the likelihood of below-average completions.
 
-    unclipped = ratio * advantages
-    clipped = torch.clamp(
-        ratio,
-        1.0 - clip_eps,
-        1.0 + clip_eps,
-    ) * advantages
+    The KL term discourages the current projector from drifting too far from
+    the frozen SFT projector.
+    """
 
-    policy_objective = torch.minimum(unclipped, clipped)
+    advantages = advantages.detach()
 
-    policy_loss = -(
-        policy_objective * token_mask
-    ).sum() / token_mask.sum().clamp_min(1.0)
+    token_counts = token_mask.sum(dim=1).clamp_min(1.0)
 
-    # Simple token-level KL proxy against the frozen SFT reference projector.
-    kl = (current_token_log_probs - ref_token_log_probs) * token_mask
-    kl_loss = kl.sum() / token_mask.sum().clamp_min(1.0)
+    # Length-normalized sequence log-probs.
+    policy_seq_log_probs = (
+        policy_token_log_probs * token_mask
+    ).sum(dim=1) / token_counts
+
+    ref_seq_log_probs = (
+        ref_token_log_probs * token_mask
+    ).sum(dim=1) / token_counts
+
+    # REINFORCE-style policy-gradient term.
+    #
+    # advantage > 0 -> increase log-prob
+    # advantage < 0 -> decrease log-prob
+    policy_loss = -(advantages * policy_seq_log_probs).mean()
+
+    # Non-negative KL-style penalty.
+    #
+    # This is more stable than directly using:
+    #   policy_seq_log_probs - ref_seq_log_probs
+    #
+    # because this expression is >= 0.
+    log_ratio_ref = ref_seq_log_probs - policy_seq_log_probs
+    kl_per_sample = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
+    kl_loss = kl_per_sample.mean()
 
     loss = policy_loss + beta * kl_loss
 
-    clip_fraction = (
-        ((ratio < 1.0 - clip_eps) | (ratio > 1.0 + clip_eps)).float()
-        * token_mask
-    ).sum() / token_mask.sum().clamp_min(1.0)
-
-    return loss, policy_loss, kl_loss, clip_fraction
+    return loss, policy_loss, kl_loss
 
 
 def _log_metrics(
@@ -457,10 +545,10 @@ def _log_metrics(
     breakdowns,
     policy_loss,
     kl_loss,
-    clip_fraction,
     loss,
     step,
     total_steps,
+    skipped: bool = False,
 ):
     mean_reward = rewards.mean().item()
 
@@ -475,21 +563,33 @@ def _log_metrics(
     writer.add_scalar("rl/mean_reward", mean_reward, global_step)
     writer.add_scalar("rl/json_valid_rate", json_valid_rate, global_step)
     writer.add_scalar("rl/schema_rate", schema_rate, global_step)
-    writer.add_scalar("rl/policy_loss", policy_loss.item(), global_step)
-    writer.add_scalar("rl/kl_loss", kl_loss.item(), global_step)
-    writer.add_scalar("rl/clip_fraction", clip_fraction.item(), global_step)
-    writer.add_scalar("rl/loss", loss.item(), global_step)
 
-    print(
-        f"step {global_step:4d} | "
-        f"batch {step + 1}/{total_steps} | "
-        f"reward {mean_reward:.3f} | "
-        f"json {json_valid_rate:.0%} | "
-        f"schema {schema_rate:.0%} | "
-        f"policy {policy_loss.item():.4f} | "
-        f"kl {kl_loss.item():.4f} | "
-        f"clip {clip_fraction.item():.2f}"
-    )
+    if not skipped:
+        writer.add_scalar("rl/policy_loss", policy_loss.item(), global_step)
+        writer.add_scalar("rl/kl_loss", kl_loss.item(), global_step)
+        writer.add_scalar("rl/loss", loss.item(), global_step)
+
+        print(
+            f"step {global_step:4d} | "
+            f"batch {step + 1}/{total_steps} | "
+            f"reward {mean_reward:.3f} | "
+            f"json {json_valid_rate:.0%} | "
+            f"schema {schema_rate:.0%} | "
+            f"policy {policy_loss.item():.4f} | "
+            f"kl {kl_loss.item():.4f} | "
+            f"loss {loss.item():.4f}"
+        )
+    else:
+        writer.add_scalar("rl/skipped_update", 1.0, global_step)
+
+        print(
+            f"step {global_step:4d} | "
+            f"batch {step + 1}/{total_steps} | "
+            f"reward {mean_reward:.3f} | "
+            f"json {json_valid_rate:.0%} | "
+            f"schema {schema_rate:.0%} | "
+            f"skipped update: identical rewards"
+        )
 
 
 def _log_sample(gen, rewards, ground_truth, global_step, writer):
@@ -521,7 +621,6 @@ def _save_rl_checkpoint(
     mean_reward: float,
     checkpoint_path: str | Path,
     completions_per_image: int,
-    clip_eps: float,
     kl_coef: float,
 ):
     checkpoint_path = Path(checkpoint_path)
@@ -534,9 +633,8 @@ def _save_rl_checkpoint(
             "mean_reward": mean_reward,
             "projector_state_dict": model.projector.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "algorithm": "grpo_projector_only",
+            "algorithm": "group_relative_policy_gradient_projector_only",
             "completions_per_image": completions_per_image,
-            "clip_eps": clip_eps,
             "kl_coef": kl_coef,
         },
         checkpoint_path,
