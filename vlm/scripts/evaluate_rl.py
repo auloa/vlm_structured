@@ -19,7 +19,6 @@ def main():
         max_completion_tokens=cfg.eval.max_completion_tokens,
         temperature=cfg.eval.temperature,
         do_sample=False,
-        generation_repetition_penalty=1.0,
     )
 
 

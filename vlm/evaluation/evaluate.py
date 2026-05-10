@@ -45,7 +45,6 @@ def evaluate_checkpoint(
     max_completion_tokens: int = 192,
     temperature: float = 0.1,
     do_sample: bool = False,
-    generation_repetition_penalty: float = 1.0,
     seed: int = 42,
 ) -> EvalMetrics:
     """
@@ -156,7 +155,6 @@ def evaluate_checkpoint(
                 k=1,
                 max_completion_tokens=max_completion_tokens,
                 temperature=temperature,
-                generation_repetition_penalty=generation_repetition_penalty,
                 do_sample=do_sample,
             )
 
