@@ -64,6 +64,7 @@ class CORDDataset(Dataset):
         self.num_loaded = len(raw)
         self.num_parse_failed = 0
         self.num_too_long = 0
+        self.num_empty_items = 0
 
         for idx in range(len(raw)):
             item = cast(CORDRow, raw[idx])
@@ -73,6 +74,11 @@ class CORDDataset(Dataset):
             except RuntimeError:
                 self.num_parse_failed += 1
                 continue
+
+            if not parsed["line_items"]:
+                self.num_empty_items += 1
+                continue
+
             label = json.dumps(parsed, ensure_ascii=False)
             if tokenizer is not None and max_target_length is not None:
                 eos = tokenizer.eos_token or ""
