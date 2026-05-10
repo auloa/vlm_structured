@@ -15,7 +15,7 @@ class CausalLM(nn.Module):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.tokenizer.padding_side = "left"
+        self.tokenizer.padding_side = "right"
 
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
