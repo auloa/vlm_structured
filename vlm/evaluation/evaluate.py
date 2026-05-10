@@ -156,7 +156,6 @@ def evaluate_checkpoint(
                 k=1,
                 max_completion_tokens=max_completion_tokens,
                 temperature=temperature,
-                top_p=top_p,
                 generation_repetition_penalty=generation_repetition_penalty,
                 do_sample=do_sample,
             )
