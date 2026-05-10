@@ -96,7 +96,7 @@ EXPERIMENTS = {
     "debug": debug,
     "donut-tinyllama-sft-rl": donut_tinyllama_sft_rl,
     "donut-tinyllama": donut_tinyllama,
-    "fine-tuned-donut": fine_tuned_donut,
+    "finetuned-donut": finetuned_donut,
 }
 
 
