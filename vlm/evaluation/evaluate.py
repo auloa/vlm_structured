@@ -102,7 +102,7 @@ def evaluate_checkpoint(
     model.lm.model.eval()
     model.projector.eval()
 
-    assert_only_projector_trainable(model, allow_none_trainable=True)
+    assert_only_projector_trainable(model)
 
     tokenizer = model.lm.tokenizer
     tokenizer.padding_side = "right"
