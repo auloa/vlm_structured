@@ -34,7 +34,7 @@ class ModelConfig:
 class SFTConfig:
     epochs: int = 1
     batch_size: int = 1
-    learning_rate: float = 1e-4
+    learning_rate: float = 5e-5
     weight_decay: float = 0.01
     grad_accum_steps: int = 4
     max_target_length: int = 256
@@ -46,7 +46,7 @@ class SFTConfig:
 class RLConfig:
     epochs: int = 2
     completions_per_image: int = 4
-    learning_rate: float = 5e-5
+    learning_rate: float = 5e-6
     weight_decay: float = 0.01
     temperature: float = 0.8
     max_completion_tokens: int = 256

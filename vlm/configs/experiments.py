@@ -31,7 +31,7 @@ def donut_tinyllama_sft_rl() -> ExperimentConfig:
     cfg.vision.image_width = 960
 
     cfg.sft.epochs = 2
-    cfg.sft.batch_size = 1
+    cfg.sft.batch_size = 4
     cfg.sft.grad_accum_steps = 4
 
     cfg.rl.epochs = 1
