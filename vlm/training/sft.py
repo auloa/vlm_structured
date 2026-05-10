@@ -266,7 +266,7 @@ def _log_sample(
         generated = model.lm.model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=full_attention_mask,
-            max_completion_tokens=max_completion_tokens,
+            max_new_tokens=max_completion_tokens,
             do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
