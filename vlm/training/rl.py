@@ -580,26 +580,22 @@ def _log_metrics(
 ):
     mean_reward = rewards.mean().item()
 
-    json_valid_rate = sum(
-        b.json_valid > 0 for b in breakdowns
-    ) / max(1, len(breakdowns))
-
-    schema_rate = sum(
-        b.schema > 0.1 for b in breakdowns
-    ) / max(1, len(breakdowns))
+    # format reward > 0.20 means valid parseable JSON (vs 0.10 jsonish or 0.0)
+    format_pass_rate = sum(b.format >= 0.20 for b in breakdowns) / max(1, len(breakdowns))
+    schema_pass_rate = sum(b.schema >= 0.20 for b in breakdowns) / max(1, len(breakdowns))
 
     writer.add_scalar("rl/mean_reward", mean_reward, global_step)
-    writer.add_scalar("rl/json_valid_rate", json_valid_rate, global_step)
-    writer.add_scalar("rl/schema_rate", schema_rate, global_step)
+    writer.add_scalar("rl/format_pass_rate", format_pass_rate, global_step)
+    writer.add_scalar("rl/schema_pass_rate", schema_pass_rate, global_step)
 
     writer.add_scalar(
-        "rl/reward_json_like",
-        sum(b.json_like for b in breakdowns) / max(1, len(breakdowns)),
+        "rl/reward_format",
+        sum(b.format for b in breakdowns) / max(1, len(breakdowns)),
         global_step,
     )
     writer.add_scalar(
-        "rl/reward_line_items_populated",
-        sum(b.line_items_populated for b in breakdowns) / max(1, len(breakdowns)),
+        "rl/reward_schema",
+        sum(b.schema for b in breakdowns) / max(1, len(breakdowns)),
         global_step,
     )
     writer.add_scalar(
@@ -608,13 +604,8 @@ def _log_metrics(
         global_step,
     )
     writer.add_scalar(
-        "rl/reward_anti_hallucination",
-        sum(b.anti_hallucination for b in breakdowns) / max(1, len(breakdowns)),
-        global_step,
-    )
-    writer.add_scalar(
-        "rl/reward_total_match",
-        sum(b.total_match for b in breakdowns) / max(1, len(breakdowns)),
+        "rl/reward_hallucination",
+        sum(b.hallucination for b in breakdowns) / max(1, len(breakdowns)),
         global_step,
     )
 
@@ -627,8 +618,8 @@ def _log_metrics(
             f"step {global_step:4d} | "
             f"batch {step + 1}/{total_steps} | "
             f"reward {mean_reward:.3f} | "
-            f"json {json_valid_rate:.0%} | "
-            f"schema {schema_rate:.0%} | "
+            f"format {format_pass_rate:.0%} | "
+            f"schema {schema_pass_rate:.0%} | "
             f"policy {policy_loss.item():.4f} | "
             f"kl {kl_loss.item():.4f} | "
             f"loss {loss.item():.4f}"
@@ -640,8 +631,8 @@ def _log_metrics(
             f"step {global_step:4d} | "
             f"batch {step + 1}/{total_steps} | "
             f"reward {mean_reward:.3f} | "
-            f"json {json_valid_rate:.0%} | "
-            f"schema {schema_rate:.0%} | "
+            f"format {format_pass_rate:.0%} | "
+            f"schema {schema_pass_rate:.0%} | "
             f"skipped update: identical rewards"
         )
 
