@@ -92,11 +92,38 @@ def finetuned_donut() -> ExperimentConfig:
 
     return cfg
 
+def finetuned_donut_real() -> ExperimentConfig:
+    cfg = ExperimentConfig(name="finetuned-donut-real")
+
+    cfg.vision.model_name = "naver-clova-ix/donut-base-finetuned-cord-v2"
+
+    cfg.data.train_samples = 900
+    cfg.data.val_samples = 200
+    cfg.data.test_samples = 50
+
+    cfg.vision.image_height = 640
+    cfg.vision.image_width = 960
+
+    cfg.sft.max_target_length = 192
+
+    cfg.sft.epochs = 10
+    cfg.sft.batch_size = 4
+    cfg.sft.grad_accum_steps = 4
+
+    cfg.rl.epochs = 1
+    cfg.rl.max_target_length = 192
+    cfg.rl.temperature = 0.7
+    cfg.rl.kl_coeff = 0.02
+    cfg.rl.completions_per_image = 4
+
+    return cfg
+
 EXPERIMENTS = {
     "debug": debug,
     "donut-tinyllama-sft-rl": donut_tinyllama_sft_rl,
     "donut-tinyllama": donut_tinyllama,
     "finetuned-donut": finetuned_donut,
+    "finetuned-donut-real": finetuned_donut_real,
 }
 
 

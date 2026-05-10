@@ -3,9 +3,9 @@ from pathlib import Path
 
 import torch
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from transformers import get_cosine_schedule_with_warmup
 
 from vlm.data.collator import CORDCollator
 from vlm.data.dataset import CORDDataset
@@ -138,9 +138,10 @@ def train_sft(
     steps_per_epoch = (len(train_loader) + grad_accum_steps - 1) // grad_accum_steps
     total_optimizer_steps = max(1, steps_per_epoch * epochs)
 
-    scheduler = CosineAnnealingLR(
+    scheduler = get_cosine_schedule_with_warmup(
         optimizer,
-        T_max=total_optimizer_steps,
+        num_warmup_steps=max(1, total_optimizer_steps // 10),
+        num_training_steps=total_optimizer_steps,
     )
 
     writer = SummaryWriter(log_dir=str(run_dir))
