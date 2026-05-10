@@ -99,14 +99,14 @@ def finetuned_donut_real() -> ExperimentConfig:
 
     cfg.data.train_samples = 900
     cfg.data.val_samples = 200
-    cfg.data.test_samples = 50
+    cfg.data.test_samples = 40
 
     cfg.vision.image_height = 640
     cfg.vision.image_width = 960
 
     cfg.sft.max_target_length = 192
 
-    cfg.sft.epochs = 10
+    cfg.sft.epochs = 25
     cfg.sft.batch_size = 4
     cfg.sft.grad_accum_steps = 4
 
