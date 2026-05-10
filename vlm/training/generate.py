@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import dataclass
 
 import torch
@@ -39,19 +40,17 @@ def generate_k_outputs(
 
     images = [image] * k
 
-    generate_kwargs = {
-        "inputs_embeds": None,
-        "attention_mask": None,
-        "max_new_tokens": max_completion_tokens,
-        "do_sample": do_sample,
-        "pad_token_id": tokenizer.pad_token_id,
-        "eos_token_id": tokenizer.eos_token_id,
-        "use_cache": True,
-        "return_dict_in_generate": True,
-    }
+    generation_config = deepcopy(model.lm.model.generation_config)
+    generation_config.max_length = None
+    generation_config.max_new_tokens = max_completion_tokens
+    generation_config.pad_token_id = tokenizer.pad_token_id
+    generation_config.eos_token_id = tokenizer.eos_token_id
+    generation_config.use_cache = True
+    generation_config.return_dict_in_generate = True
+    generation_config.do_sample = do_sample
 
     if do_sample:
-        generate_kwargs["temperature"] = temperature
+        generation_config.temperature = temperature
 
     with torch.no_grad():
         inputs_embeds, full_attention_mask = model.prepare_inputs_embeds(
@@ -60,10 +59,11 @@ def generate_k_outputs(
             attention_mask=attention_mask,
         )
 
-        generate_kwargs["inputs_embeds"] = inputs_embeds
-        generate_kwargs["attention_mask"] = full_attention_mask
-
-        output = model.lm.model.generate(**generate_kwargs)
+        output = model.lm.model.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=full_attention_mask,
+            generation_config=generation_config,
+        )
 
     texts = tokenizer.batch_decode(
         output.sequences,
