@@ -39,7 +39,7 @@ class SFTConfig:
     grad_accum_steps: int = 4
     max_target_length: int = 256
     log_every: int = 10
-    sample_every: int = 50
+    sample_every: int = 10
 
 
 @dataclass

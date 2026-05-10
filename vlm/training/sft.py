@@ -6,6 +6,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+
 from vlm.data.collator import CORDCollator
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
@@ -39,6 +40,8 @@ def train_sft(
     device = get_device()
     print(f"device: {device}")
 
+    assert grad_accum_steps >= 1, "grad_accum_steps must be >= 1"
+
     run_dir = Path(run_dir)
     checkpoint_dir = Path(checkpoint_dir)
     best_checkpoint_path = Path(best_checkpoint_path)
@@ -52,9 +55,26 @@ def train_sft(
         lm_name=lm_name,
     )
 
-    assert_only_projector_trainable(model)
-
     tokenizer = model.lm.tokenizer
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Explicitly freeze base modules and train only the projector.
+    for p in model.vision_encoder.parameters():
+        p.requires_grad_(False)
+
+    for p in model.lm.model.parameters():
+        p.requires_grad_(False)
+
+    for p in model.projector.parameters():
+        p.requires_grad_(True)
+
+    # Frozen modules should remain in eval mode.
+    model.vision_encoder.eval()
+    model.lm.model.eval()
+
+    assert_only_projector_trainable(model)
 
     print("loading datasets...")
     train_dataset = CORDDataset(
@@ -111,8 +131,14 @@ def train_sft(
         weight_decay=weight_decay,
     )
 
-    total_steps = max(1, (len(train_loader) // grad_accum_steps) * epochs)
-    scheduler = CosineAnnealingLR(optimizer, T_max=total_steps)
+    # Number of optimizer updates, not number of dataloader batches.
+    steps_per_epoch = (len(train_loader) + grad_accum_steps - 1) // grad_accum_steps
+    total_optimizer_steps = max(1, steps_per_epoch * epochs)
+
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=total_optimizer_steps,
+    )
 
     writer = SummaryWriter(log_dir=str(run_dir))
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -122,8 +148,11 @@ def train_sft(
 
     for epoch in range(epochs):
         model.projector.train()
+        model.vision_encoder.eval()
+        model.lm.model.eval()
+
         epoch_loss = 0.0
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         print(f"\nepoch {epoch + 1}/{epochs}")
 
@@ -137,15 +166,18 @@ def train_sft(
                 )
 
             output_loss: torch.Tensor = output.loss
+
+            # Scale loss for gradient accumulation.
             loss = output_loss / grad_accum_steps
             loss.backward()
 
+            # Store the real, unscaled loss for logging.
             epoch_loss += output_loss.item()
 
             should_step = (step + 1) % grad_accum_steps == 0
-            is_last_step = step + 1 == len(train_loader)
+            is_last_batch = (step + 1) == len(train_loader)
 
-            if should_step or is_last_step:
+            if should_step or is_last_batch:
                 torch.nn.utils.clip_grad_norm_(
                     model.projector.parameters(),
                     max_norm=1.0,
@@ -153,7 +185,7 @@ def train_sft(
 
                 optimizer.step()
                 scheduler.step()
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
 
                 global_step += 1
 
@@ -189,6 +221,7 @@ def train_sft(
         writer.add_scalar("val/loss", val_loss, global_step)
 
         train_loss = epoch_loss / max(1, len(train_loader))
+
         print(
             f"epoch {epoch + 1} complete | "
             f"train loss {train_loss:.4f} | "
@@ -217,7 +250,12 @@ def train_sft(
 
 
 def _validate(model, val_loader) -> float:
+    was_training = model.projector.training
+
     model.projector.eval()
+    model.vision_encoder.eval()
+    model.lm.model.eval()
+
     total_loss = 0.0
 
     with torch.no_grad():
@@ -232,6 +270,9 @@ def _validate(model, val_loader) -> float:
 
             total_loss += output.loss.item()
 
+    if was_training:
+        model.projector.train()
+
     return total_loss / max(1, len(val_loader))
 
 
@@ -245,7 +286,11 @@ def _log_sample(
     writer,
     max_completion_tokens: int,
 ):
+    was_training = model.projector.training
+
     model.projector.eval()
+    model.vision_encoder.eval()
+    model.lm.model.eval()
 
     prompt_tokens = tokenizer(
         instruction,
@@ -263,22 +308,32 @@ def _log_sample(
             attention_mask=attention_mask,
         )
 
+        # Use max_length instead of max_new_tokens to avoid Transformers warning:
+        # "Both max_new_tokens and max_length have been set".
+        #
+        # For inputs_embeds, max_length is total sequence length:
+        # visual tokens + prompt tokens + newly generated tokens.
         generated = model.lm.model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=full_attention_mask,
-            max_new_tokens=max_completion_tokens,
+            max_length=inputs_embeds.shape[1] + max_completion_tokens,
             do_sample=False,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             use_cache=True,
         )
 
-    decoded = tokenizer.decode(generated[0], skip_special_tokens=True)
+    decoded = tokenizer.decode(
+        generated[0],
+        skip_special_tokens=True,
+    )
 
     writer.add_text("samples/output", decoded, global_step)
+
     print(f"\nsample @ step {global_step}:\n{decoded[:300]}")
 
-    model.projector.train()
+    if was_training:
+        model.projector.train()
 
 
 def _save_checkpoint(
