@@ -1,9 +1,9 @@
-from vlm.config.experiments import donut_tinyllama_sft_rl
+from vlm.configs.experiments import donut_tinyllama
 from vlm.evaluation.evaluate import evaluate_checkpoint
 
 
 def main():
-    cfg = donut_tinyllama_sft_rl()
+    cfg = donut_tinyllama()
 
     evaluate_checkpoint(
         dataset_name=cfg.data.dataset_name,
