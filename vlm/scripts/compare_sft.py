@@ -1,9 +1,9 @@
-from vlm.configs.experiments import finetuned_donut
+from vlm.configs.experiments import finetuned_donut_real
 from vlm.evaluation.visual_compare import build_visual_comparison_report
 
 
 def main():
-    cfg = finetuned_donut()
+    cfg = finetuned_donut_real()
 
     build_visual_comparison_report(
         dataset_name=cfg.data.dataset_name,
