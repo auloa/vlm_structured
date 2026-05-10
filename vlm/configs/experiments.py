@@ -68,8 +68,8 @@ def donut_tinyllama() -> ExperimentConfig:
 
     return cfg
 
-def fine_tuned_donut() -> ExperimentConfig:
-    cfg = ExperimentConfig(name="donut-tinyllama")
+def finetuned_donut() -> ExperimentConfig:
+    cfg = ExperimentConfig(name="finetuned-donut")
 
     cfg.data.train_samples = 800
     cfg.data.val_samples = 200

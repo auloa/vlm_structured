@@ -5,7 +5,7 @@ from vlm.utils.training import set_seed
 set_seed(42)
 
 
-EXPERIMENT_NAME = "fine-tuned-donut"
+EXPERIMENT_NAME = "finetuned-donut"
 
 
 if __name__ == "__main__":

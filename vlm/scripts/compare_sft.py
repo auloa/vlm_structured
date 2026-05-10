@@ -1,9 +1,9 @@
-from vlm.configs.experiments import donut_tinyllama
+from vlm.configs.experiments import finetuned_donut
 from vlm.evaluation.visual_compare import build_visual_comparison_report
 
 
 def main():
-    cfg = donut_tinyllama()
+    cfg = finetuned_donut()
 
     build_visual_comparison_report(
         dataset_name=cfg.data.dataset_name,
