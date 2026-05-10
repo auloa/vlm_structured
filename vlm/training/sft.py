@@ -238,6 +238,17 @@ def train_sft(
         )
 
         if val_loss < best_val_loss:
+            # Save per-epoch checkpoint
+            epoch_checkpoint_path = checkpoint_dir / f"epoch_{epoch + 1:02d}.pt"
+            _save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                step=global_step,
+                val_loss=val_loss,
+                checkpoint_path=epoch_checkpoint_path,
+            )
+            print(f"epoch checkpoint saved: {epoch_checkpoint_path}")
             best_val_loss = val_loss
 
             _save_checkpoint(
