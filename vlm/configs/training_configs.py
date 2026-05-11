@@ -137,11 +137,15 @@ def qwen_sp(name: str) -> TrainingConfig:
 def tlama_ca(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
     cfg.projector.cross_attention = True
+    cfg.rl.kl_coef = 0.05
+    cfg.rl.completions_per_image = 4
     return cfg
 
 @register_config
 def tlama_sp(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
+    cfg.rl.kl_coef = 0.05
+    cfg.rl.completions_per_image = 4
     return cfg
 
 
