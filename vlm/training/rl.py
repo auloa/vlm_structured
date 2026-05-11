@@ -393,7 +393,7 @@ def _log_metrics(
     )
 
     clean_json_rate = sum(
-        b.format >= 0.30 for b in breakdowns
+        b.format >= 0.15 for b in breakdowns
     ) / max(1, len(breakdowns))
 
     parseable_or_wrapped_json_rate = sum(
@@ -401,7 +401,7 @@ def _log_metrics(
     ) / max(1, len(breakdowns))
 
     schema_rate = sum(
-        b.schema >= 0.30 for b in breakdowns
+        b.schema >= 0.15 for b in breakdowns
     ) / max(1, len(breakdowns))
 
     writer.add_scalar("rl/reward/mean", mean_reward, global_step)
