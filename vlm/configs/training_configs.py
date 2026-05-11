@@ -119,7 +119,11 @@ def cross_attention_projection(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
     return cfg
 
-
+@register_config
+def qwen_ca(name: str) -> TrainingConfig:
+    cfg = _base_receipt_config(name)
+    cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    return cfg
 
 def get_training_config(name: str) -> TrainingConfig:
     name = name.replace("-", "_").replace(" ", "_")
