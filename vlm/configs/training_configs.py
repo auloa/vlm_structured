@@ -135,6 +135,13 @@ def qwen_ca(name: str) -> TrainingConfig:
     cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
     return cfg
 
+@register_config
+def qwen_sp(name: str) -> TrainingConfig:
+    cfg = _base_receipt_config(name)
+    cfg.projector.cross_attention = False
+    cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    return cfg
+
 def get_training_config(name: str) -> TrainingConfig:
     name = name.replace("-", "_").replace(" ", "_")
     try:
