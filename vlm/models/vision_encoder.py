@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 from PIL import Image
-from transformers import AutoImageProcessor, VisionEncoderDecoderModel, DonutProcessor
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 
 
 class DonutVisionEncoder(nn.Module):
-    def     __init__(
+    def __init__(
         self,
         model_name: str = "naver-clova-ix/donut-base-finetuned-cord-v2",
         device: torch.device | None = None,
@@ -17,18 +17,16 @@ class DonutVisionEncoder(nn.Module):
 
         self.device = device or torch.device("cpu")
 
-        if default_processor:
-            self.processor = DonutProcessor.from_pretrained(model_name)
-            self.processor = self.processor.image_processor
-        else:
-            self.processor = DonutProcessor.from_pretrained(model_name)
-            self.processor.image_processor.size = {
-                    "height": img_shape[0],
-                    "width": img_shape[1],
-                }
-            self.processor.image_processor.do_align_long_axis = False
-            self.processor = self.processor.image_processor
+        processor = DonutProcessor.from_pretrained(model_name)
 
+        if not default_processor:
+            processor.image_processor.size = {
+                "height": img_shape[0],
+                "width": img_shape[1],
+            }
+            processor.image_processor.do_align_long_axis = False
+
+        self.processor = processor.image_processor
         self.model_dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
 
         full_model = VisionEncoderDecoderModel.from_pretrained(
@@ -41,6 +39,7 @@ class DonutVisionEncoder(nn.Module):
 
         self.model.to(self.device)
         self.model.requires_grad_(not freeze)
+
         if freeze:
             self.model.eval()
 
@@ -53,6 +52,7 @@ class DonutVisionEncoder(nn.Module):
             images=images,
             return_tensors="pt",
         )
+
         inputs = {
             key: (
                 value.to(self.device, dtype=self.model_dtype)
@@ -61,5 +61,6 @@ class DonutVisionEncoder(nn.Module):
             )
             for key, value in inputs.items()
         }
+
         outputs = self.model(**inputs)
         return outputs.last_hidden_state

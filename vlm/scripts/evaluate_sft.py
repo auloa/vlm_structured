@@ -1,4 +1,4 @@
-from vlm.configs.experiments import donut_tinyllama
+from vlm.configs.training_configs import donut_tinyllama
 from vlm.evaluation.evaluate import evaluate_checkpoint
 
 

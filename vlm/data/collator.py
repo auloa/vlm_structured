@@ -21,7 +21,8 @@ class CORDCollator:
 
     labels:
         [-100 for instruction] + [target JSON token ids]
-        Padding positions are also set to -100.
+
+    Padding positions are also set to -100.
     """
 
     def __init__(
@@ -46,6 +47,8 @@ class CORDCollator:
         eos = self.tokenizer.eos_token or ""
         label_strings = [sample["label"] + eos for sample in batch]
 
+        # Long targets are filtered in CORDDataset, so truncation is disabled.
+        # If a too-long target slips through, this avoids silently cutting labels.
         target_tokens = self.tokenizer(
             label_strings,
             return_tensors="pt",

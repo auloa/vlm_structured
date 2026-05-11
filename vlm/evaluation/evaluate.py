@@ -2,120 +2,106 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from statistics import mean
 
 import torch
+from PIL import Image
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
+from vlm.configs.training_schema import TrainingConfig
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
-from vlm.training.generate import generate_k_outputs
+from vlm.training.common import (
+    ensure_dir,
+    prepare_tokenizer,
+    set_projector_only_trainable,
+)
 from vlm.training.rewards import compute_reward, extract_json
 from vlm.utils.device import get_device
-from vlm.utils.training import assert_only_projector_trainable, set_seed
+from vlm.utils.training import set_seed
+
+
+REQUIRED_KEYS = {"line_items", "total"}
 
 
 @dataclass
-class EvalMetrics:
+class SampleEval:
+    index: int
+    ground_truth: str
+    prediction: str
+    extracted_json: str | None
+    strict_json_valid: bool
+    extractable_json_valid: bool
+    has_required_keys: bool
+    line_items_is_list: bool
+    total_present: bool
+    format_adherent: bool
+    reward: float
+    total_match: bool
+
+
+@dataclass
+class EvalSummary:
+    stage: str
+    checkpoint_path: str
     num_samples: int
-    valid_json_rate: float
-    schema_rate: float
+    strict_json_rate: float
+    extractable_json_rate: float
+    required_keys_rate: float
+    line_items_list_rate: float
+    total_present_rate: float
     format_adherence_rate: float
-    non_empty_line_items_rate: float
-    empty_line_items_rate: float
-    numeric_name_rate: float
-    duplicate_item_rate: float
-    extra_text_rate: float
-    average_reward: float
-    average_generation_length: float
+    total_match_rate: float
+    mean_reward: float
 
 
 def evaluate_checkpoint(
-    dataset_name: str,
-    split: str,
-    num_samples: int,
-    vision_model_name: str,
-    image_height: int,
-    image_width: int,
-    lm_name: str,
-    instruction: str,
+    cfg: TrainingConfig,
     checkpoint_path: str | Path,
-    output_dir: str | Path,
-    max_completion_tokens: int = 192,
-    temperature: float = 0.1,
+    stage: str,
+    num_samples: int | None = None,
+    max_completion_tokens: int | None = None,
+    temperature: float | None = None,
     do_sample: bool = False,
-    seed: int = 42,
-) -> EvalMetrics:
+) -> EvalSummary:
+    """Evaluate one projector checkpoint on the held-out test split.
+
+    The main assignment metric is format_adherence_rate:
+        prediction is exact valid JSON
+        AND contains required keys: line_items and total
+        AND line_items is a list
     """
-    Evaluate a projector checkpoint on held-out receipt images.
-
-    This can be used for:
-        - SFT checkpoint evaluation
-        - RL checkpoint evaluation
-
-    It measures the assignment-critical metric:
-        format_adherence_rate =
-            valid JSON AND contains required top-level keys:
-            line_items and total.
-    """
-
-    set_seed(seed)
-
     device = get_device()
-    print(f"device: {device}")
+    set_seed(42)
 
     checkpoint_path = Path(checkpoint_path)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    results_dir = ensure_dir(cfg.results_dir)
+    eval_dir = ensure_dir(results_dir / f"eval_{stage}")
 
-    print("loading model...")
-    model = ReceiptVLM(
+    max_samples = num_samples or cfg.eval.num_samples
+    max_completion_tokens = max_completion_tokens or cfg.eval.max_completion_tokens
+    temperature = temperature if temperature is not None else cfg.eval.temperature
+
+    print(f"evaluating stage: {stage}")
+    print(f"checkpoint: {checkpoint_path}")
+    print(f"device: {device}")
+
+    model = _load_model_with_projector(
+        cfg=cfg,
+        checkpoint_path=checkpoint_path,
         device=device,
-        vision_model_name=vision_model_name,
-        image_height=image_height,
-        image_width=image_width,
-        lm_name=lm_name,
     )
 
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    tokenizer = prepare_tokenizer(model.lm.tokenizer)
 
-    # Supports both your full checkpoint format and raw projector state_dict.
-    if isinstance(ckpt, dict) and "projector_state_dict" in ckpt:
-        model.projector.load_state_dict(ckpt["projector_state_dict"])
-    else:
-        model.projector.load_state_dict(ckpt)
-
-    print(f"loaded checkpoint: {checkpoint_path}")
-
-    # Freeze/eval safety.
-    for p in model.vision_encoder.parameters():
-        p.requires_grad_(False)
-    for p in model.lm.model.parameters():
-        p.requires_grad_(False)
-    for p in model.projector.parameters():
-        p.requires_grad_(False)
-
-    model.vision_encoder.eval()
-    model.lm.model.eval()
-    model.projector.eval()
-
-    assert_only_projector_trainable(model)
-
-    tokenizer = model.lm.tokenizer
-    tokenizer.padding_side = "right"
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    print("loading dataset...")
     dataset = CORDDataset(
-        split=split,
-        max_samples=num_samples,
-        dataset_name=dataset_name,
+        split=cfg.data.test_split,
+        max_samples=max_samples,
+        dataset_name=cfg.data.dataset_name,
+        tokenizer=tokenizer,
+        max_target_length=cfg.sft.max_target_length,
     )
-
-    print(f"eval dataset: {len(dataset)} samples")
 
     loader = DataLoader(
         dataset,
@@ -124,214 +110,318 @@ def evaluate_checkpoint(
         collate_fn=_eval_collate,
     )
 
-    records: list[dict[str, Any]] = []
+    samples: list[SampleEval] = []
 
-    counts = {
-        "valid_json": 0,
-        "schema": 0,
-        "format_adherence": 0,
-        "non_empty_line_items": 0,
-        "empty_line_items": 0,
-        "numeric_name": 0,
-        "duplicate_items": 0,
-        "extra_text": 0,
-    }
+    with SummaryWriter(log_dir=str(cfg.root_dir / "runs" / f"eval_{stage}")) as writer:
+        for index, batch in enumerate(loader):
+            image = batch["image"][0]
+            ground_truth = batch["label"][0]
 
-    total_reward = 0.0
-    total_gen_length = 0
-
-    print("running evaluation...")
-
-    for idx, sample in enumerate(tqdm(loader, total=len(loader))):
-        image = sample["image"][0]
-        ground_truth = sample["label"][0]
-
-        with torch.no_grad():
-            gen = generate_k_outputs(
+            prediction = generate_one(
                 model=model,
                 image=image,
                 tokenizer=tokenizer,
-                instruction=instruction,
-                k=1,
+                instruction=cfg.model.instruction,
                 max_completion_tokens=max_completion_tokens,
                 temperature=temperature,
                 do_sample=do_sample,
             )
 
-        generated = gen.texts[0]
-        reward = compute_reward(generated, ground_truth)
+            sample_eval = score_prediction(
+                index=index,
+                prediction=prediction,
+                ground_truth=ground_truth,
+            )
+            samples.append(sample_eval)
 
-        analysis = analyze_generation(generated)
+            writer.add_scalar(
+                "eval/format_adherent",
+                float(sample_eval.format_adherent),
+                index,
+            )
+            writer.add_scalar(
+                "eval/reward",
+                sample_eval.reward,
+                index,
+            )
 
-        counts["valid_json"] += int(analysis["valid_json"])
-        counts["schema"] += int(analysis["schema"])
-        counts["format_adherence"] += int(analysis["format_adherence"])
-        counts["non_empty_line_items"] += int(analysis["non_empty_line_items"])
-        counts["empty_line_items"] += int(analysis["empty_line_items"])
-        counts["numeric_name"] += int(analysis["numeric_name"])
-        counts["duplicate_items"] += int(analysis["duplicate_items"])
-        counts["extra_text"] += int(analysis["extra_text"])
+            if index < 10:
+                writer.add_text(
+                    f"eval/sample_{index}",
+                    _format_sample_markdown(sample_eval),
+                    index,
+                )
 
-        total_reward += reward.total
-        total_gen_length += len(generated)
-
-        records.append(
-            {
-                "index": idx,
-                "generated": generated,
-                "ground_truth": ground_truth,
-                "reward": asdict(reward),
-                "analysis": analysis,
-            }
-        )
-
-    n = max(1, len(records))
-
-    metrics = EvalMetrics(
-        num_samples=len(records),
-        valid_json_rate=counts["valid_json"] / n,
-        schema_rate=counts["schema"] / n,
-        format_adherence_rate=counts["format_adherence"] / n,
-        non_empty_line_items_rate=counts["non_empty_line_items"] / n,
-        empty_line_items_rate=counts["empty_line_items"] / n,
-        numeric_name_rate=counts["numeric_name"] / n,
-        duplicate_item_rate=counts["duplicate_items"] / n,
-        extra_text_rate=counts["extra_text"] / n,
-        average_reward=total_reward / n,
-        average_generation_length=total_gen_length / n,
+    summary = summarize_samples(
+        stage=stage,
+        checkpoint_path=checkpoint_path,
+        samples=samples,
     )
 
-    metrics_path = output_dir / "metrics.json"
-    samples_path = output_dir / "samples.jsonl"
+    _save_json(eval_dir / "summary.json", asdict(summary))
+    _save_jsonl(eval_dir / "samples.jsonl", [asdict(sample) for sample in samples])
+    _save_markdown_report(eval_dir / "samples.md", summary, samples)
 
-    with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(asdict(metrics), f, indent=2, ensure_ascii=False)
+    print_summary(summary)
+    print(f"saved summary: {eval_dir / 'summary.json'}")
+    print(f"saved samples: {eval_dir / 'samples.jsonl'}")
+    print(f"saved report:  {eval_dir / 'samples.md'}")
 
-    with samples_path.open("w", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    print_metrics(metrics)
-    print(f"\nmetrics saved to: {metrics_path}")
-    print(f"samples saved to: {samples_path}")
-
-    return metrics
+    return summary
 
 
-def analyze_generation(text: str) -> dict[str, Any]:
-    """
-    Analyze a generated output for assignment-relevant format metrics.
-    """
+def compare_sft_and_rl(
+    cfg: TrainingConfig,
+    num_samples: int | None = None,
+    max_completion_tokens: int | None = None,
+) -> None:
+    """Evaluate SFT and RL checkpoints and save a comparison summary."""
+    summaries = []
 
-    stripped = text.strip()
-    extracted = extract_json(stripped)
+    summaries.append(
+        evaluate_checkpoint(
+            cfg=cfg,
+            checkpoint_path=cfg.sft_best_checkpoint,
+            stage="sft",
+            num_samples=num_samples,
+            max_completion_tokens=max_completion_tokens,
+            do_sample=False,
+        )
+    )
 
-    result = {
-        "valid_json": False,
-        "schema": False,
-        "format_adherence": False,
-        "non_empty_line_items": False,
-        "empty_line_items": False,
-        "numeric_name": False,
-        "duplicate_items": False,
-        "extra_text": False,
-        "num_line_items": 0,
+    summaries.append(
+        evaluate_checkpoint(
+            cfg=cfg,
+            checkpoint_path=cfg.rl_best_checkpoint,
+            stage="rl",
+            num_samples=num_samples,
+            max_completion_tokens=max_completion_tokens,
+            do_sample=False,
+        )
+    )
+
+    comparison = {
+        summary.stage: asdict(summary)
+        for summary in summaries
     }
 
-    if extracted is None:
-        return result
+    results_dir = ensure_dir(cfg.results_dir)
+    _save_json(results_dir / "eval_comparison.json", comparison)
 
-    try:
-        parsed = json.loads(extracted)
-    except json.JSONDecodeError:
-        return result
+    print("\ncomparison")
+    print("-" * 80)
+    for summary in summaries:
+        print(
+            f"{summary.stage:>4} | "
+            f"format={summary.format_adherence_rate:.1%} | "
+            f"strict_json={summary.strict_json_rate:.1%} | "
+            f"required_keys={summary.required_keys_rate:.1%} | "
+            f"mean_reward={summary.mean_reward:.3f}"
+        )
 
-    result["valid_json"] = True
-    result["extra_text"] = stripped != extracted.strip()
+    print(f"\nsaved comparison: {results_dir / 'eval_comparison.json'}")
 
-    if not isinstance(parsed, dict):
-        return result
 
-    has_line_items = "line_items" in parsed
-    has_total = "total" in parsed
-
-    line_items = parsed.get("line_items")
-
-    result["schema"] = (
-        has_line_items
-        and has_total
-        and isinstance(line_items, list)
+def _load_model_with_projector(
+    cfg: TrainingConfig,
+    checkpoint_path: Path,
+    device: torch.device,
+) -> ReceiptVLM:
+    model = ReceiptVLM(
+        device=device,
+        vision_model_name=cfg.vision.model_name,
+        default_vision_processor=cfg.vision.default_processor,
+        image_height=cfg.vision.image_height,
+        image_width=cfg.vision.image_width,
+        lm_name=cfg.model.lm_name,
     )
 
-    result["format_adherence"] = result["valid_json"] and result["schema"]
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.projector.load_state_dict(checkpoint["projector_state_dict"])
 
-    if isinstance(line_items, list):
-        result["num_line_items"] = len(line_items)
-        result["non_empty_line_items"] = len(line_items) > 0
-        result["empty_line_items"] = len(line_items) == 0
-        result["numeric_name"] = _has_numeric_only_name(line_items)
-        result["duplicate_items"] = _has_duplicate_items(line_items)
+    set_projector_only_trainable(model)
+    model.eval()
 
-    return result
+    return model
 
 
-def _has_numeric_only_name(line_items: list[Any]) -> bool:
-    for item in line_items:
-        if not isinstance(item, dict):
-            continue
+def generate_one(
+    model: ReceiptVLM,
+    image: Image.Image,
+    tokenizer,
+    instruction: str,
+    max_completion_tokens: int,
+    temperature: float,
+    do_sample: bool,
+) -> str:
+    device = model.device
 
-        name = str(item.get("name", "")).strip()
+    prompt_tokens = tokenizer(
+        instruction,
+        return_tensors="pt",
+        add_special_tokens=True,
+    )
 
-        if not name:
-            continue
+    input_ids = prompt_tokens["input_ids"].to(device)
+    attention_mask = prompt_tokens["attention_mask"].to(device)
 
-        if re.fullmatch(r"[\d\s.,]+", name):
-            return True
+    with torch.inference_mode():
+        inputs_embeds, full_attention_mask = model.prepare_inputs_embeds(
+            images=[image],
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
 
-    return False
+        generation_kwargs = {
+            "inputs_embeds": inputs_embeds,
+            "attention_mask": full_attention_mask,
+            "max_length": inputs_embeds.shape[1] + max_completion_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+            "use_cache": True,
+            "return_dict_in_generate": True,
+            "repetition_penalty": 1.1,
+        }
+
+        if do_sample:
+            generation_kwargs["temperature"] = temperature
+            generation_kwargs["top_p"] = 0.95
+
+        output = model.lm.model.generate(**generation_kwargs)
+
+    return tokenizer.decode(
+        output.sequences[0],
+        skip_special_tokens=True,
+    ).strip()
 
 
-def _has_duplicate_items(line_items: list[Any]) -> bool:
-    signatures = []
+def score_prediction(
+    index: int,
+    prediction: str,
+    ground_truth: str,
+) -> SampleEval:
+    strict_parsed = _loads_exact_json(prediction)
+    extracted = extract_json(prediction)
+    extracted_parsed = _loads_exact_json(extracted) if extracted is not None else None
 
-    for item in line_items:
-        if not isinstance(item, dict):
-            continue
+    parsed_for_schema = strict_parsed if strict_parsed is not None else extracted_parsed
 
-        name = _norm_text(item.get("name", ""))
-        count = _norm_text(item.get("count", ""))
-        price = _norm_number(item.get("price", ""))
+    strict_json_valid = strict_parsed is not None
+    extractable_json_valid = extracted_parsed is not None
 
-        signatures.append((name, count, price))
+    has_required_keys = _has_required_keys(parsed_for_schema)
+    line_items_is_list = _line_items_is_list(parsed_for_schema)
+    total_present = _total_present(parsed_for_schema)
 
-    if len(signatures) <= 1:
+    # This is the main assignment metric.
+    # It requires the model output itself to be strict JSON, not JSON buried in prose.
+    format_adherent = (
+        strict_json_valid
+        and has_required_keys
+        and line_items_is_list
+        and total_present
+    )
+
+    reward = compute_reward(prediction, ground_truth)
+    total_match = _total_matches(parsed_for_schema, ground_truth)
+
+    return SampleEval(
+        index=index,
+        ground_truth=ground_truth,
+        prediction=prediction,
+        extracted_json=extracted,
+        strict_json_valid=strict_json_valid,
+        extractable_json_valid=extractable_json_valid,
+        has_required_keys=has_required_keys,
+        line_items_is_list=line_items_is_list,
+        total_present=total_present,
+        format_adherent=format_adherent,
+        reward=reward.total,
+        total_match=total_match,
+    )
+
+
+def summarize_samples(
+    stage: str,
+    checkpoint_path: Path,
+    samples: list[SampleEval],
+) -> EvalSummary:
+    n = max(1, len(samples))
+
+    return EvalSummary(
+        stage=stage,
+        checkpoint_path=str(checkpoint_path),
+        num_samples=len(samples),
+        strict_json_rate=sum(s.strict_json_valid for s in samples) / n,
+        extractable_json_rate=sum(s.extractable_json_valid for s in samples) / n,
+        required_keys_rate=sum(s.has_required_keys for s in samples) / n,
+        line_items_list_rate=sum(s.line_items_is_list for s in samples) / n,
+        total_present_rate=sum(s.total_present for s in samples) / n,
+        format_adherence_rate=sum(s.format_adherent for s in samples) / n,
+        total_match_rate=sum(s.total_match for s in samples) / n,
+        mean_reward=mean([s.reward for s in samples]) if samples else 0.0,
+    )
+
+
+def print_summary(summary: EvalSummary) -> None:
+    print("\nsummary")
+    print("-" * 80)
+    print(f"stage:                 {summary.stage}")
+    print(f"num samples:           {summary.num_samples}")
+    print(f"strict JSON rate:      {summary.strict_json_rate:.1%}")
+    print(f"extractable JSON rate: {summary.extractable_json_rate:.1%}")
+    print(f"required keys rate:    {summary.required_keys_rate:.1%}")
+    print(f"line_items list rate:  {summary.line_items_list_rate:.1%}")
+    print(f"total present rate:    {summary.total_present_rate:.1%}")
+    print(f"FORMAT ADHERENCE RATE: {summary.format_adherence_rate:.1%}")
+    print(f"total match rate:      {summary.total_match_rate:.1%}")
+    print(f"mean reward:           {summary.mean_reward:.3f}")
+
+
+def _loads_exact_json(text: str | None):
+    if text is None:
+        return None
+
+    try:
+        return json.loads(text.strip())
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _has_required_keys(parsed) -> bool:
+    return isinstance(parsed, dict) and REQUIRED_KEYS.issubset(parsed.keys())
+
+
+def _line_items_is_list(parsed) -> bool:
+    return isinstance(parsed, dict) and isinstance(parsed.get("line_items"), list)
+
+
+def _total_present(parsed) -> bool:
+    if not isinstance(parsed, dict):
         return False
 
-    return len(set(signatures)) < len(signatures)
+    total = parsed.get("total")
+    return total is not None and str(total).strip() != ""
 
 
-def _norm_text(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value).lower().strip())
+def _total_matches(parsed, ground_truth: str) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+
+    try:
+        gt = json.loads(ground_truth)
+    except json.JSONDecodeError:
+        return False
+
+    pred_total = _normalize_numberish(parsed.get("total", ""))
+    gt_total = _normalize_numberish(gt.get("total", ""))
+
+    return bool(pred_total and gt_total and pred_total == gt_total)
 
 
-def _norm_number(value: Any) -> str:
-    return re.sub(r"\D", "", str(value))
-
-
-def print_metrics(metrics: EvalMetrics):
-    print("\nEvaluation metrics")
-    print("------------------")
-    print(f"num_samples:                 {metrics.num_samples}")
-    print(f"valid_json_rate:             {metrics.valid_json_rate:.2%}")
-    print(f"schema_rate:                 {metrics.schema_rate:.2%}")
-    print(f"format_adherence_rate:       {metrics.format_adherence_rate:.2%}")
-    print(f"non_empty_line_items_rate:   {metrics.non_empty_line_items_rate:.2%}")
-    print(f"empty_line_items_rate:       {metrics.empty_line_items_rate:.2%}")
-    print(f"numeric_name_rate:           {metrics.numeric_name_rate:.2%}")
-    print(f"duplicate_item_rate:         {metrics.duplicate_item_rate:.2%}")
-    print(f"extra_text_rate:             {metrics.extra_text_rate:.2%}")
-    print(f"average_reward:              {metrics.average_reward:.4f}")
-    print(f"average_generation_length:   {metrics.average_generation_length:.1f}")
+def _normalize_numberish(value) -> str:
+    return re.sub(r"[^0-9]", "", str(value).lower().strip())
 
 
 def _eval_collate(batch):
@@ -339,3 +429,67 @@ def _eval_collate(batch):
         "image": [sample["image"] for sample in batch],
         "label": [sample["label"] for sample in batch],
     }
+
+
+def _save_json(path: Path, obj) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+
+
+def _save_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _save_markdown_report(
+    path: Path,
+    summary: EvalSummary,
+    samples: list[SampleEval],
+    max_samples: int = 20,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"# Evaluation Report: {summary.stage}",
+        "",
+        "## Summary",
+        "",
+        f"- Checkpoint: `{summary.checkpoint_path}`",
+        f"- Number of samples: {summary.num_samples}",
+        f"- Strict JSON rate: {summary.strict_json_rate:.1%}",
+        f"- Extractable JSON rate: {summary.extractable_json_rate:.1%}",
+        f"- Required keys rate: {summary.required_keys_rate:.1%}",
+        f"- Format adherence rate: **{summary.format_adherence_rate:.1%}**",
+        f"- Total match rate: {summary.total_match_rate:.1%}",
+        f"- Mean reward: {summary.mean_reward:.3f}",
+        "",
+        "## Sample Outputs",
+        "",
+    ]
+
+    for sample in samples[:max_samples]:
+        lines.append(_format_sample_markdown(sample))
+        lines.append("\n---\n")
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _format_sample_markdown(sample: SampleEval) -> str:
+    return (
+        f"### Sample {sample.index}\n\n"
+        f"- Format adherent: `{sample.format_adherent}`\n"
+        f"- Strict JSON valid: `{sample.strict_json_valid}`\n"
+        f"- Extractable JSON valid: `{sample.extractable_json_valid}`\n"
+        f"- Required keys: `{sample.has_required_keys}`\n"
+        f"- Reward: `{sample.reward:.3f}`\n"
+        f"- Total match: `{sample.total_match}`\n\n"
+        f"**Ground truth**\n\n"
+        f"```json\n{sample.ground_truth}\n```\n\n"
+        f"**Prediction**\n\n"
+        f"```text\n{sample.prediction[:1200]}\n```\n"
+    )

@@ -1,4 +1,4 @@
-from vlm.configs.experiments import finetuned_donut_real
+from vlm.configs.training_configs import finetuned_donut_real
 from vlm.evaluation.visual_compare import build_visual_comparison_report
 
 

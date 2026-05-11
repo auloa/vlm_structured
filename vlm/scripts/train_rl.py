@@ -1,35 +1,33 @@
-from vlm.configs.experiments import get_experiment
+import argparse
+
+from vlm.configs.experiments import EXPERIMENTS, get_experiment
 from vlm.training.rl import train_rl
-from vlm.utils.training import set_seed
-
-set_seed(42)
 
 
-EXPERIMENT_NAME = "finetuned-donut-real"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run RL training.")
+
+    parser.add_argument(
+        "--experiment",
+        "-e",
+        type=str,
+        default="receipt-base",
+        choices=sorted(EXPERIMENTS),
+        help="Experiment config name.",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = get_experiment(args.experiment)
+
+    print(f"running RL experiment: {cfg.name}")
+    print(f"loading SFT checkpoint from: {cfg.sft_best_checkpoint}")
+
+    train_rl(cfg)
+
 
 if __name__ == "__main__":
-    cfg = get_experiment(EXPERIMENT_NAME)
-    train_rl(
-        dataset_name=cfg.data.dataset_name,
-        train_split=cfg.data.train_split,
-        train_samples=cfg.data.train_samples,
-        vision_model_name=cfg.vision.model_name,
-        image_height=cfg.vision.image_height,
-        image_width=cfg.vision.image_width,
-        lm_name=cfg.model.lm_name,
-        instruction=cfg.model.instruction,
-        epochs=cfg.rl.epochs,
-        completions_per_image=cfg.rl.completions_per_image,
-        learning_rate=cfg.rl.learning_rate,
-        weight_decay=cfg.rl.weight_decay,
-        temperature=cfg.rl.temperature,
-        max_completion_tokens=cfg.rl.max_completion_tokens,
-        grad_clip_norm=cfg.rl.grad_clip_norm,
-        kl_coef=cfg.rl.kl_coef,
-        log_every=cfg.rl.log_every,
-        sample_every=cfg.rl.sample_every,
-        sft_checkpoint_path=cfg.sft_best_checkpoint,
-        run_dir=cfg.rl_run_dir,
-        checkpoint_dir=cfg.rl_checkpoint_dir,
-        best_checkpoint_path=cfg.rl_best_checkpoint,
-    )
+    main()

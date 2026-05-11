@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import torch
@@ -7,136 +6,98 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import get_cosine_schedule_with_warmup
 
+from vlm.configs.training_schema import TrainingConfig
 from vlm.data.collator import CORDCollator
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
+from vlm.training.common import (
+    ensure_dir,
+    log_text,
+    prepare_tokenizer,
+    set_projector_only_trainable,
+)
 from vlm.utils.device import get_device
-from vlm.utils.training import assert_only_projector_trainable, get_autocast
+from vlm.utils.training import get_autocast
 
 
-def train_sft(
-    dataset_name: str,
-    train_split: str,
-    val_split: str,
-    train_samples: int,
-    val_samples: int,
-    vision_model_name: str,
-    image_height: int,
-    image_width: int,
-    lm_name: str,
-    instruction: str,
-    epochs: int,
-    batch_size: int,
-    learning_rate: float,
-    weight_decay: float,
-    grad_accum_steps: int,
-    grad_clip_norm: float,
-    max_target_length: int,
-    log_every: int,
-    sample_every: int,
-    run_dir: str | Path,
-    checkpoint_dir: str | Path,
-    best_checkpoint_path: str | Path,
-):
+def train_sft(cfg: TrainingConfig) -> None:
+    data = cfg.data
+    vision = cfg.vision
+    model_cfg = cfg.model
+    sft = cfg.sft
+
+    assert sft.grad_accum_steps >= 1, "grad_accum_steps must be >= 1"
+
     device = get_device()
+    checkpoint_dir = ensure_dir(cfg.sft_checkpoint_dir)
+
     print(f"device: {device}")
-
-    assert grad_accum_steps >= 1, "grad_accum_steps must be >= 1"
-
-    run_dir = Path(run_dir)
-    checkpoint_dir = Path(checkpoint_dir)
-    best_checkpoint_path = Path(best_checkpoint_path)
-
     print("loading model...")
+
     model = ReceiptVLM(
         device=device,
-        vision_model_name=vision_model_name,
-        image_height=image_height,
-        image_width=image_width,
-        lm_name=lm_name,
+        vision_model_name=vision.model_name,
+        default_vision_processor=vision.default_processor,
+        image_height=vision.image_height,
+        image_width=vision.image_width,
+        lm_name=model_cfg.lm_name,
     )
 
-    tokenizer = model.lm.tokenizer
-
-    tokenizer.padding_side = "right"
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # Explicitly freeze base modules and train only the projector.
-    for p in model.vision_encoder.parameters():
-        p.requires_grad_(False)
-
-    for p in model.lm.model.parameters():
-        p.requires_grad_(False)
-
-    for p in model.projector.parameters():
-        p.requires_grad_(True)
-
-    # Frozen modules should remain in eval mode.
-    model.vision_encoder.eval()
-    model.lm.model.eval()
-
-    assert_only_projector_trainable(model)
+    tokenizer = prepare_tokenizer(model.lm.tokenizer)
+    set_projector_only_trainable(model)
 
     print("loading datasets...")
+
     train_dataset = CORDDataset(
-        split=train_split,
-        max_samples=train_samples,
-        dataset_name=dataset_name,
+        split=data.train_split,
+        max_samples=data.train_samples,
+        dataset_name=data.dataset_name,
         tokenizer=tokenizer,
-        max_target_length=max_target_length,
+        max_target_length=sft.max_target_length,
     )
 
     val_dataset = CORDDataset(
-        split=val_split,
-        max_samples=val_samples,
-        dataset_name=dataset_name,
+        split=data.val_split,
+        max_samples=data.val_samples,
+        dataset_name=data.dataset_name,
         tokenizer=tokenizer,
-        max_target_length=max_target_length,
+        max_target_length=sft.max_target_length,
     )
 
-    print(
-        f"train dataset: {len(train_dataset)} samples | "
-        f"parse failed: {train_dataset.num_parse_failed} | "
-        f"too long: {train_dataset.num_too_long}"
-    )
-
-    print(
-        f"val dataset: {len(val_dataset)} samples | "
-        f"parse failed: {val_dataset.num_parse_failed} | "
-        f"too long: {val_dataset.num_too_long}"
-    )
+    _print_dataset_stats("train", train_dataset)
+    _print_dataset_stats("val", val_dataset)
 
     collator = CORDCollator(
         tokenizer=tokenizer,
-        instruction=instruction,
-        max_target_length=max_target_length,
+        instruction=model_cfg.instruction,
+        max_target_length=sft.max_target_length,
     )
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=batch_size,
+        batch_size=sft.batch_size,
         shuffle=True,
         collate_fn=collator,
     )
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=batch_size,
+        batch_size=sft.batch_size,
         shuffle=False,
         collate_fn=collator,
     )
 
     optimizer = AdamW(
         model.projector.parameters(),
-        lr=learning_rate,
-        weight_decay=weight_decay,
+        lr=sft.learning_rate,
+        weight_decay=sft.weight_decay,
     )
 
-    # Number of optimizer updates, not number of dataloader batches.
-    steps_per_epoch = (len(train_loader) + grad_accum_steps - 1) // grad_accum_steps
-    total_optimizer_steps = max(1, steps_per_epoch * epochs)
+    steps_per_epoch = (
+        len(train_loader) + sft.grad_accum_steps - 1
+    ) // sft.grad_accum_steps
+
+    total_optimizer_steps = max(1, steps_per_epoch * sft.epochs)
 
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -144,52 +105,56 @@ def train_sft(
         num_training_steps=total_optimizer_steps,
     )
 
-    writer = SummaryWriter(log_dir=str(run_dir))
-    os.makedirs(checkpoint_dir, exist_ok=True)
-
     global_step = 0
     best_val_loss = float("inf")
 
-    for epoch in range(epochs):
-        model.projector.train()
-        model.vision_encoder.eval()
-        model.lm.model.eval()
+    with SummaryWriter(log_dir=str(cfg.sft_run_dir)) as writer:
+        log_text(writer, "sft/log", f"device: {device}", step=0)
 
-        epoch_loss = 0.0
-        optimizer.zero_grad(set_to_none=True)
+        for epoch in range(sft.epochs):
+            model.projector.train()
+            model.vision_encoder.eval()
+            model.lm.model.eval()
 
-        print(f"\nepoch {epoch + 1}/{epochs}")
+            epoch_loss = 0.0
+            valid_batches = 0
 
-        for step, batch in enumerate(train_loader):
-            with get_autocast(device):
-                output = model(
-                    images=batch.images,
-                    input_ids=batch.input_ids,
-                    attention_mask=batch.attention_mask,
-                    labels=batch.labels,
-                )
+            optimizer.zero_grad(set_to_none=True)
 
-            output_loss: torch.Tensor = output.loss
+            print(f"\nepoch {epoch + 1}/{sft.epochs}")
 
-            if torch.isnan(output_loss) or torch.isinf(output_loss):
-                print(f"warning: invalid SFT loss at batch {step}; skipping")
-                optimizer.zero_grad(set_to_none=True)
-                continue
+            for batch_idx, batch in enumerate(train_loader, start=1):
+                with get_autocast(device):
+                    output = model(
+                        images=batch.images,
+                        input_ids=batch.input_ids,
+                        attention_mask=batch.attention_mask,
+                        labels=batch.labels,
+                    )
 
-            # Scale loss for gradient accumulation.
-            loss = output_loss / grad_accum_steps
-            loss.backward()
+                output_loss: torch.Tensor = output.loss
 
-            # Store the real, unscaled loss for logging.
-            epoch_loss += output_loss.item()
+                if not torch.isfinite(output_loss):
+                    print(f"warning: invalid SFT loss at batch {batch_idx}; skipping")
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
 
-            should_step = (step + 1) % grad_accum_steps == 0
-            is_last_batch = (step + 1) == len(train_loader)
+                # Scale loss for gradient accumulation.
+                (output_loss / sft.grad_accum_steps).backward()
 
-            if should_step or is_last_batch:
-                torch.nn.utils.clip_grad_norm_(
+                # Store the real, unscaled loss for logging.
+                epoch_loss += output_loss.item()
+                valid_batches += 1
+
+                should_step = batch_idx % sft.grad_accum_steps == 0
+                is_last_batch = batch_idx == len(train_loader)
+
+                if not (should_step or is_last_batch):
+                    continue
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.projector.parameters(),
-                    max_norm=grad_clip_norm,
+                    max_norm=sft.grad_clip_norm,
                 )
 
                 optimizer.step()
@@ -198,75 +163,108 @@ def train_sft(
 
                 global_step += 1
 
-                if global_step % log_every == 0:
-                    avg_loss = epoch_loss / (step + 1)
+                if global_step % sft.log_every == 0:
+                    avg_loss = epoch_loss / max(1, valid_batches)
                     lr = scheduler.get_last_lr()[0]
 
-                    writer.add_scalar("train/loss", output_loss.item(), global_step)
-                    writer.add_scalar("train/avg_loss", avg_loss, global_step)
-                    writer.add_scalar("train/lr", lr, global_step)
+                    writer.add_scalars(
+                        "sft/loss",
+                        {
+                            "step": output_loss.item(),
+                            "running_avg": avg_loss,
+                        },
+                        global_step,
+                    )
+                    writer.add_scalar("sft/optim/lr", lr, global_step)
+                    writer.add_scalar(
+                        "sft/optim/grad_norm",
+                        float(grad_norm),
+                        global_step,
+                    )
 
                     print(
                         f"step {global_step:4d} | "
-                        f"batch {step + 1}/{len(train_loader)} | "
+                        f"batch {batch_idx}/{len(train_loader)} | "
                         f"loss {output_loss.item():.4f} | "
                         f"avg {avg_loss:.4f} | "
-                        f"lr {lr:.2e}"
+                        f"lr {lr:.2e} | "
+                        f"grad {float(grad_norm):.2f}"
                     )
 
-                if global_step % sample_every == 0:
+                if global_step % sft.sample_every == 0:
                     _log_sample(
                         model=model,
                         batch=batch,
                         tokenizer=tokenizer,
-                        instruction=instruction,
+                        instruction=model_cfg.instruction,
                         device=device,
                         global_step=global_step,
                         writer=writer,
                         max_completion_tokens=128,
                     )
 
-        val_loss = _validate(model, val_loader)
-        writer.add_scalar("val/loss", val_loss, global_step)
+            train_loss = epoch_loss / max(1, valid_batches)
+            val_loss = _validate(model, val_loader)
 
-        train_loss = epoch_loss / max(1, len(train_loader))
-
-        print(
-            f"epoch {epoch + 1} complete | "
-            f"train loss {train_loss:.4f} | "
-            f"val loss {val_loss:.4f}"
-        )
-
-        if val_loss < best_val_loss:
-            # Save per-epoch checkpoint
-            epoch_checkpoint_path = checkpoint_dir / f"epoch_{epoch + 1:02d}.pt"
-            _save_checkpoint(
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                step=global_step,
-                val_loss=val_loss,
-                checkpoint_path=epoch_checkpoint_path,
-            )
-            print(f"epoch checkpoint saved: {epoch_checkpoint_path}")
-            best_val_loss = val_loss
-
-            _save_checkpoint(
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                step=global_step,
-                val_loss=val_loss,
-                checkpoint_path=best_checkpoint_path,
+            writer.add_scalars(
+                "sft/epoch_loss",
+                {
+                    "train": train_loss,
+                    "val": val_loss,
+                },
+                epoch + 1,
             )
 
-            print(
-                f"checkpoint saved: {best_checkpoint_path} "
-                f"(val loss {val_loss:.4f})"
+            epoch_msg = (
+                f"epoch {epoch + 1} complete | "
+                f"train loss {train_loss:.4f} | "
+                f"val loss {val_loss:.4f}"
             )
+            log_text(writer, "sft/log", epoch_msg, step=global_step)
 
-    writer.close()
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+
+                epoch_checkpoint_path = checkpoint_dir / f"epoch_{epoch + 1:02d}.pt"
+
+                _save_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    step=global_step,
+                    val_loss=val_loss,
+                    checkpoint_path=epoch_checkpoint_path,
+                )
+
+                _save_checkpoint(
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    step=global_step,
+                    val_loss=val_loss,
+                    checkpoint_path=cfg.sft_best_checkpoint,
+                )
+
+                log_text(
+                    writer,
+                    "sft/log",
+                    (
+                        f"checkpoint saved: {cfg.sft_best_checkpoint} "
+                        f"(val loss {val_loss:.4f})"
+                    ),
+                    step=global_step,
+                )
+
     print("SFT training complete")
+
+
+def _print_dataset_stats(name: str, dataset: CORDDataset) -> None:
+    print(
+        f"{name} dataset: {len(dataset)} samples | "
+        f"parse failed: {dataset.num_parse_failed} | "
+        f"too long: {dataset.num_too_long} | "
+        f"empty items: {dataset.num_empty_items}"
+    )
 
 
 def _validate(model, val_loader) -> float:
@@ -278,7 +276,7 @@ def _validate(model, val_loader) -> float:
 
     total_loss = 0.0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in val_loader:
             with get_autocast(model.device):
                 output = model(
@@ -302,10 +300,10 @@ def _log_sample(
     tokenizer,
     instruction: str,
     device,
-    global_step,
+    global_step: int,
     writer,
     max_completion_tokens: int,
-):
+) -> None:
     was_training = model.projector.training
 
     model.projector.eval()
@@ -321,18 +319,14 @@ def _log_sample(
     input_ids = prompt_tokens["input_ids"].to(device)
     attention_mask = prompt_tokens["attention_mask"].to(device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         inputs_embeds, full_attention_mask = model.prepare_inputs_embeds(
             images=[batch.images[0]],
             input_ids=input_ids,
             attention_mask=attention_mask,
         )
 
-        # Use max_length instead of max_new_tokens to avoid Transformers warning:
-        # "Both max_new_tokens and max_length have been set".
-        #
-        # For inputs_embeds, max_length is total sequence length:
-        # visual tokens + prompt tokens + newly generated tokens.
+        # For inputs_embeds, max_length is total prefix length + new tokens.
         generated = model.lm.model.generate(
             inputs_embeds=inputs_embeds,
             attention_mask=full_attention_mask,
@@ -348,7 +342,7 @@ def _log_sample(
         skip_special_tokens=True,
     )
 
-    writer.add_text("samples/output", decoded, global_step)
+    writer.add_text("sft/samples/output", decoded, global_step)
 
     print(f"\nsample @ step {global_step}:\n{decoded[:300]}")
 
@@ -363,7 +357,7 @@ def _save_checkpoint(
     step: int,
     val_loss: float,
     checkpoint_path: str | Path,
-):
+) -> None:
     checkpoint_path = Path(checkpoint_path)
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 

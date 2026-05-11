@@ -1,7 +1,5 @@
 from dataclasses import dataclass, field
-from pathlib import Path
-
-EXPERIMENTS_DIR = Path("experiments")
+from vlm.configs.paths import EXPERIMENTS_DIR
 
 
 @dataclass
@@ -10,9 +8,9 @@ class DataConfig:
     train_split: str = "train"
     val_split: str = "validation"
     test_split: str = "test"
-    train_samples: int = 400
+    train_samples: int = 800
     val_samples: int = 100
-    test_samples: int = 50
+    test_samples: int = 100
 
 
 @dataclass
@@ -23,7 +21,7 @@ class VisionConfig:
     image_width: int = 960
 
 @dataclass
-class ModelConfig:
+class LMConfig:
     lm_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     instruction: str = (
         "Extract the tabular data from this document and output it in JSON format.\nAssistant:"
@@ -32,7 +30,7 @@ class ModelConfig:
 
 @dataclass
 class SFTConfig:
-    epochs: int = 1
+    epochs: int = 10
     batch_size: int = 1
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
@@ -60,16 +58,16 @@ class RLConfig:
 @dataclass
 class EvalConfig:
     num_samples: int = 50
-    max_completion_tokens: int = 256
+    max_completion_tokens: int = 192
     temperature: float = 0.1
 
 
 @dataclass
-class ExperimentConfig:
+class TrainingConfig:
     name: str
     data: DataConfig = field(default_factory=DataConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
+    model: LMConfig = field(default_factory=LMConfig)
     sft: SFTConfig = field(default_factory=SFTConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)

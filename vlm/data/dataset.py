@@ -10,8 +10,10 @@ from transformers import PreTrainedTokenizerBase
 def _to_str(value) -> str:
     if isinstance(value, list):
         return " ".join(str(v) for v in value).strip()
+
     if value is None:
         return ""
+
     return str(value).strip()
 
 
@@ -47,6 +49,16 @@ class CORDRow(TypedDict):
 
 
 class CORDDataset(Dataset):
+    """CORD receipt dataset converted to simple JSON targets.
+
+    Each sample contains:
+        image: RGB PIL image
+        label: JSON string with line_items and total
+
+    If tokenizer and max_target_length are provided, targets that are too long
+    are filtered out before max_samples is applied.
+    """
+
     def __init__(
         self,
         split: str = "train",
@@ -56,7 +68,6 @@ class CORDDataset(Dataset):
         tokenizer: PreTrainedTokenizerBase | None = None,
         max_target_length: int | None = None,
     ):
-
         raw = load_dataset(dataset_name, split=split)
 
         candidates: list[dict[str, Any]] = []
@@ -69,6 +80,7 @@ class CORDDataset(Dataset):
         for idx in range(len(raw)):
             item = cast(CORDRow, raw[idx])
             image = item["image"].convert("RGB")
+
             try:
                 parsed = parse_ground_truth(item["ground_truth"])
             except RuntimeError:
@@ -80,6 +92,8 @@ class CORDDataset(Dataset):
                 continue
 
             label = json.dumps(parsed, ensure_ascii=False)
+
+            target_len = None
             if tokenizer is not None and max_target_length is not None:
                 eos = tokenizer.eos_token or ""
                 tokenized = tokenizer(
@@ -87,14 +101,14 @@ class CORDDataset(Dataset):
                     add_special_tokens=False,
                 )
                 target_len = len(tokenized["input_ids"])
+
                 if target_len > max_target_length:
                     self.num_too_long += 1
                     continue
-            else:
-                target_len = None
 
             width, height = image.size
             area = width * height
+
             candidates.append(
                 {
                     "image": image,
@@ -125,5 +139,5 @@ class CORDDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> dict:
+    def __getitem__(self, index: int) -> dict[str, Image.Image | str]:
         return self.samples[index]
