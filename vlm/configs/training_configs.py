@@ -114,6 +114,11 @@ def debug(name: str) -> TrainingConfig:
 def receipt_base(name: str) -> TrainingConfig:
     return _base_receipt_config(name)
 
+@register_config
+def cross_attention_projection(name: str) -> TrainingConfig:
+    cfg = _base_receipt_config(name)
+    return cfg
+
 
 
 def get_training_config(name: str) -> TrainingConfig:

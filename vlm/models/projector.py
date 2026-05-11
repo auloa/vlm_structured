@@ -17,3 +17,16 @@ class Projector(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x.float())
+
+
+class AttentionPool(nn.Module):
+    def __init__(self, dim, num_queries=64, num_heads=8):
+        super().__init__()
+        self.queries = nn.Parameter(torch.randn(num_queries, dim) * 0.02)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):                     # x: (B, N_visual, dim)
+        q = self.queries.unsqueeze(0).expand(x.shape[0], -1, -1)
+        out, _ = self.attn(q, x, x)
+        return self.norm(out + q)

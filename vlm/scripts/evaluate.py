@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stage",
         type=str,
-        default="both",
+        default="sft",
         choices=["sft", "rl", "both", "custom"],
         help="Which checkpoint to evaluate.",
     )

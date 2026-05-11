@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from vlm.models.language_model import CausalLM
-from vlm.models.projector import Projector
+from vlm.models.resampler import PerceiverResampler
 from vlm.models.vision_encoder import DonutVisionEncoder
 
 
@@ -41,9 +41,13 @@ class ReceiptVLM(nn.Module):
             freeze=freeze_lm,
         )
 
-        self.projector = Projector(
+        self.projector = PerceiverResampler(
             vis_dim=self.vision_encoder.hidden_size,
             llm_dim=self.lm.hidden_size,
+            num_queries=64,
+            num_heads=8,
+            num_layers=2,
+            ffn_mult=4,
         ).to(self.device)
 
     def _get_visual_embeddings(self, images: list[Image.Image]) -> torch.Tensor:
