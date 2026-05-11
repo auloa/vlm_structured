@@ -31,7 +31,11 @@ class RewardBreakdown:
 
 
 REQUIRED_TOP_KEYS = {"line_items", "total"}
-REQUIRED_ITEM_KEYS = {"name", "count", "price"}
+
+# `count` is intentionally optional: the dataset only emits it when the
+# receipt actually shows a quantity, so requiring it would punish the
+# model for faithfully matching the image.
+REQUIRED_ITEM_KEYS = {"name", "price"}
 
 
 def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
