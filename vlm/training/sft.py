@@ -344,9 +344,23 @@ def _log_sample(
         skip_special_tokens=True,
     )
 
-    writer.add_text("sft/samples/output", decoded, global_step)
+    # Recover the ground-truth target string from labels.
+    # Labels have -100 over the instruction prefix and padding; the remaining
+    # positions are the target JSON token ids.
+    label_ids = batch.labels[0]
+    target_ids = label_ids[label_ids != -100]
+    ground_truth = tokenizer.decode(target_ids, skip_special_tokens=True)
 
-    print(f"\nsample @ step {global_step}:\n{decoded[:300]}")
+    writer.add_text(
+        "sft/samples/output",
+        f"**ground truth:**\n```\n{ground_truth}\n```\n\n"
+        f"**prediction:**\n```\n{decoded}\n```",
+        global_step,
+    )
+
+    print(f"\nsample @ step {global_step}:")
+    print(f"  gt:   {ground_truth[:200]}")
+    print(f"  pred: {decoded[:200]}")
 
     if was_training:
         model.projector.train()
