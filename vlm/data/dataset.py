@@ -19,12 +19,6 @@ def _to_str(value) -> str:
 
 def _flatten_sub_names(name: str, sub) -> str:
     """Fold modifier sub-items into the parent name.
-
-    CORD records modifiers like "WELL DONE" or "MEDIUM WELL" as a nested
-    `sub` field on a menu item. They are not real line items (no price), so
-    we keep them as part of the parent name instead of emitting empty rows.
-
-    `sub` is sometimes a dict (single modifier) and sometimes a list.
     """
     if isinstance(sub, dict):
         sub = [sub]

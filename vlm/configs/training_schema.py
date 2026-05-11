@@ -53,7 +53,7 @@ class SFTConfig:
 
 @dataclass
 class RLConfig:
-    epochs: int = 1
+    epochs: int = 2
     completions_per_image: int = 4
     learning_rate: float = 5e-6
     weight_decay: float = 0.01
@@ -63,6 +63,11 @@ class RLConfig:
     kl_coef: float = 0.02
     log_every: int = 5
     sample_every: int = 20
+    ema_alpha: float = 0.05
+    save_every_n_steps: int = 200
+    max_steps: int = 1500
+    early_stop_patience: int = 300
+    early_stop_min_delta: float = 0.001
 
 
 @dataclass

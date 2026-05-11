@@ -7,7 +7,7 @@ from typing import Any
 import torch
 from datasets import load_dataset
 from PIL import Image, ImageTk
-from vlm.config import DEFAULT_CONFIG
+from vlm.configs.training_configs import _base_receipt_config as DEFAULT_CONFIG
 from vlm.data.dataset import parse_ground_truth
 from vlm.models.vision_encoder import DonutVisionEncoder
 from vlm.utils.device import get_device

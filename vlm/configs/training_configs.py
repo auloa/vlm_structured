@@ -76,7 +76,7 @@ def _base_receipt_config(name: str) -> TrainingConfig:
     cfg.sft.sample_every = 50
 
     # Reinforcement learning / alignment
-    cfg.rl.epochs = 2
+    cfg.rl.epochs = 1
     cfg.rl.completions_per_image = 4
     cfg.rl.learning_rate = 5e-6
     cfg.rl.weight_decay = 0.01
@@ -86,6 +86,11 @@ def _base_receipt_config(name: str) -> TrainingConfig:
     cfg.rl.kl_coef = 0.02
     cfg.rl.log_every = 5
     cfg.rl.sample_every = 50
+    cfg.rl.ema_alpha = 0.05
+    cfg.rl.save_every_n_steps = 200
+    cfg.rl.max_steps = 500
+    cfg.rl.early_stop_patience = 300
+    cfg.rl.early_stop_min_delta = 0.001
 
     # Evaluation
     cfg.eval.num_samples = 50
@@ -113,25 +118,13 @@ def debug(name: str) -> TrainingConfig:
     cfg.rl.completions_per_image = 2
     cfg.rl.log_every = 1
     cfg.rl.sample_every = 5
+    cfg.rl.max_steps = 50
+    cfg.rl.early_stop_patience = 30
 
     cfg.eval.num_samples = 10
 
     return cfg
 
-
-@register_config
-def qwen_ca(name: str) -> TrainingConfig:
-    cfg = _base_receipt_config(name)
-    cfg.projector.cross_attention = True
-    cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
-    return cfg
-
-@register_config
-def qwen_sp(name: str) -> TrainingConfig:
-    cfg = _base_receipt_config(name)
-    cfg.projector.cross_attention = False
-    cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
-    return cfg
 
 @register_config
 def tlama_ca(name: str) -> TrainingConfig:

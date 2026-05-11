@@ -96,18 +96,30 @@ def train_rl(cfg: TrainingConfig) -> None:
     )
 
     global_step = 0
-    best_mean_reward = -float("inf")
+    ema_reward: float | None = None
+    best_ema_reward = -float("inf")
+    best_ema_for_stopping = -float("inf")
+    steps_since_improvement = 0
+    stop_training = False
 
     with SummaryWriter(log_dir=str(cfg.rl_run_dir)) as writer:
         log_text(writer, "rl/log", f"device: {device}", step=0)
 
         for epoch in range(rl.epochs):
+            if stop_training:
+                break
+
             model.projector.train()
             epoch_rewards: list[float] = []
 
             print(f"\nepoch {epoch + 1}/{rl.epochs}")
 
             for step, sample in enumerate(loader):
+                if global_step >= rl.max_steps:
+                    print(f"max_steps ({rl.max_steps}) reached — stopping.")
+                    stop_training = True
+                    break
+
                 image = sample["image"][0]
                 ground_truth = sample["label"][0]
 
@@ -156,6 +168,15 @@ def train_rl(cfg: TrainingConfig) -> None:
                 ):
                     global_step += 1
 
+                    ema_reward, best_ema_reward, best_ema_for_stopping, steps_since_improvement, stop_training = _step_bookkeeping(
+                        model=model, optimizer=optimizer, writer=writer, cfg=cfg, rl=rl,
+                        epoch=epoch, global_step=global_step,
+                        step_reward=rewards.mean().item(),
+                        ema_reward=ema_reward, best_ema_reward=best_ema_reward,
+                        best_ema_for_stopping=best_ema_for_stopping,
+                        steps_since_improvement=steps_since_improvement,
+                    )
+
                     if global_step % rl.log_every == 0:
                         _log_metrics(
                             writer=writer,
@@ -178,6 +199,9 @@ def train_rl(cfg: TrainingConfig) -> None:
                             global_step=global_step,
                             writer=writer,
                         )
+
+                    if stop_training:
+                        break
 
                     continue
 
@@ -236,6 +260,15 @@ def train_rl(cfg: TrainingConfig) -> None:
                 optimizer.step()
                 global_step += 1
 
+                ema_reward, best_ema_reward, best_ema_for_stopping, steps_since_improvement, stop_training = _step_bookkeeping(
+                    model=model, optimizer=optimizer, writer=writer, cfg=cfg, rl=rl,
+                    epoch=epoch, global_step=global_step,
+                    step_reward=rewards.mean().item(),
+                    ema_reward=ema_reward, best_ema_reward=best_ema_reward,
+                    best_ema_for_stopping=best_ema_for_stopping,
+                    steps_since_improvement=steps_since_improvement,
+                )
+
                 # 7. Logging.
                 if global_step % rl.log_every == 0:
                     _log_metrics(
@@ -266,45 +299,76 @@ def train_rl(cfg: TrainingConfig) -> None:
                         writer=writer,
                     )
 
+                if stop_training:
+                    break
+
             mean_epoch_reward = sum(epoch_rewards) / max(1, len(epoch_rewards))
-
-            writer.add_scalar(
-                "rl/epoch_mean_reward",
-                mean_epoch_reward,
-                epoch + 1,
+            writer.add_scalar("rl/epoch_mean_reward", mean_epoch_reward, epoch + 1)
+            log_text(
+                writer, "rl/log",
+                f"epoch {epoch + 1} complete | mean reward {mean_epoch_reward:.3f} | ema {ema_reward:.3f}",
+                step=global_step,
             )
-
-            epoch_msg = (
-                f"epoch {epoch + 1} complete | "
-                f"mean reward {mean_epoch_reward:.3f}"
-            )
-            log_text(writer, "rl/log", epoch_msg, step=global_step)
-
-            if mean_epoch_reward > best_mean_reward:
-                best_mean_reward = mean_epoch_reward
-
-                _save_rl_checkpoint(
-                    model=model,
-                    optimizer=optimizer,
-                    epoch=epoch,
-                    step=global_step,
-                    mean_reward=mean_epoch_reward,
-                    checkpoint_path=cfg.rl_best_checkpoint,
-                    completions_per_image=rl.completions_per_image,
-                    kl_coef=rl.kl_coef,
-                )
-
-                log_text(
-                    writer,
-                    "rl/log",
-                    (
-                        f"checkpoint saved: {cfg.rl_best_checkpoint} "
-                        f"(mean reward {mean_epoch_reward:.3f})"
-                    ),
-                    step=global_step,
-                )
 
     print("RL training complete")
+
+
+def _step_bookkeeping(
+    model, optimizer, writer, cfg, rl, epoch, global_step,
+    step_reward, ema_reward, best_ema_reward,
+    best_ema_for_stopping, steps_since_improvement,
+):
+    """Update EMA, checkpoint, and check stopping conditions.
+
+    Returns updated (ema_reward, best_ema_reward, best_ema_for_stopping,
+    steps_since_improvement, stop_training).
+    """
+    # EMA update.
+    if ema_reward is None:
+        ema_reward = step_reward
+    else:
+        ema_reward = rl.ema_alpha * step_reward + (1 - rl.ema_alpha) * ema_reward
+
+    writer.add_scalar("rl/reward/ema", ema_reward, global_step)
+
+    # Save on EMA improvement.
+    if ema_reward > best_ema_reward:
+        best_ema_reward = ema_reward
+        _save_rl_checkpoint(
+            model=model, optimizer=optimizer, epoch=epoch, step=global_step,
+            mean_reward=ema_reward, checkpoint_path=cfg.rl_best_checkpoint,
+            completions_per_image=rl.completions_per_image, kl_coef=rl.kl_coef,
+        )
+        log_text(
+            writer, "rl/log",
+            f"checkpoint saved: step {global_step} | ema_reward {ema_reward:.3f}",
+            step=global_step,
+        )
+
+    # Periodic step checkpoint.
+    if global_step % rl.save_every_n_steps == 0:
+        step_path = Path(cfg.rl_checkpoint_dir) / f"step_{global_step:06d}.pt"
+        _save_rl_checkpoint(
+            model=model, optimizer=optimizer, epoch=epoch, step=global_step,
+            mean_reward=ema_reward, checkpoint_path=step_path,
+            completions_per_image=rl.completions_per_image, kl_coef=rl.kl_coef,
+        )
+
+    # Early stopping.
+    if ema_reward > best_ema_for_stopping + rl.early_stop_min_delta:
+        best_ema_for_stopping = ema_reward
+        steps_since_improvement = 0
+    else:
+        steps_since_improvement += 1
+
+    stop_training = steps_since_improvement >= rl.early_stop_patience
+    if stop_training:
+        print(
+            f"early stopping: no EMA improvement > {rl.early_stop_min_delta} "
+            f"for {rl.early_stop_patience} steps."
+        )
+
+    return ema_reward, best_ema_reward, best_ema_for_stopping, steps_since_improvement, stop_training
 
 
 def _log_metrics(
@@ -405,9 +469,9 @@ def _log_sample(gen, rewards, ground_truth, global_step, writer) -> None:
     writer.add_text("rl/samples", log_text, global_step)
 
     print(
-        f"\nbest @ step {global_step} "
-        f"(reward={rewards[best_idx]:.3f}):\n"
-        f"{gen.texts[best_idx][:300]}"
+        f"\nbest @ step {global_step} (reward={rewards[best_idx]:.3f}):\n"
+        f"  gt:   {ground_truth[:200]}\n"
+        f"  pred: {gen.texts[best_idx][:200]}"
     )
 
 
