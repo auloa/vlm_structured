@@ -11,6 +11,7 @@ if not hf_token:
     raise OSError("HF_TOKEN not found. Add it to your .env file.")
 
 
-def login_to_hf():
-    login(token=hf_token, add_to_git_credential=False)
+login(token=hf_token, add_to_git_credential=False)
+
+
 

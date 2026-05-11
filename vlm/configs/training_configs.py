@@ -118,15 +118,6 @@ def debug(name: str) -> TrainingConfig:
 
     return cfg
 
-@register_config
-def receipt_base(name: str) -> TrainingConfig:
-    return _base_receipt_config(name)
-
-@register_config
-def cross_attention_projection(name: str) -> TrainingConfig:
-    cfg = _base_receipt_config(name)
-    cfg.projector.cross_attention = True
-    return cfg
 
 @register_config
 def qwen_ca(name: str) -> TrainingConfig:
@@ -146,6 +137,11 @@ def qwen_sp(name: str) -> TrainingConfig:
 def tlama_ca(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
     cfg.projector.cross_attention = True
+    return cfg
+
+@register_config
+def tlama_sp(name: str) -> TrainingConfig:
+    cfg = _base_receipt_config(name)
     return cfg
 
 

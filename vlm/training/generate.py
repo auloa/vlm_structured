@@ -44,7 +44,7 @@ def generate_k_outputs(
             attention_mask=attention_mask,
         )
 
-        max_length = inputs_embeds.shape[1] + max_completion_tokens
+        max_length = inputs_embeds.shape[1] + max_completion_tokens # input embeding stay the same as we are not generating new tokens for the input, but we want to generate up to max_completion_tokens new tokens
 
         generate_kwargs = {
             "inputs_embeds": inputs_embeds,
