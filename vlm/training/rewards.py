@@ -6,10 +6,14 @@ Aligned to the assignment spec:
      penalize hallucinations, unformatted text blocks, or malformed JSON."
 
 Components:
-    format        up to 0.30   valid JSON, preferably no surrounding text
-    schema        up to 0.30   required keys present and correctly typed
-    content       up to 0.30   line item count + total accuracy + name overlap
+    format        up to 0.15   valid JSON, preferably no surrounding text
+    schema        up to 0.15   required keys present and correctly typed
+    content       up to 0.60   line item count + total accuracy + name overlap
     hallucination negative     duplicate items, garbage text, excessive output
+
+Format and schema saturate at SFT, so their weights are reduced to maintain
+the signal without dominating. Content gets the bulk of the budget since it
+is the only component with meaningful headroom after SFT.
 
 The final reward is clipped to [0, 1].
 """
@@ -70,15 +74,14 @@ def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
 def _format_score(text: str, parsed) -> float:
     """Reward clean JSON most, wrapped-but-parseable JSON less."""
     if parsed is None:
-        looks_jsonish = "{" in text and "}" in text
-        return 0.10 if looks_jsonish else 0.0
+        return 0.0
 
-    # Clean JSON: the full generated string is the JSON object.
+    # Strict JSON: the full generated string is the JSON object.
     if parse_json_object(text) is not None and text.startswith("{") and text.endswith("}"):
-        return 0.30
+        return 0.15
 
     # Parseable JSON exists, but the model added extra prose around it.
-    return 0.20
+    return 0.05
 
 
 def _schema_score(parsed) -> float:
@@ -89,16 +92,16 @@ def _schema_score(parsed) -> float:
     score = 0.0
 
     if "line_items" in parsed:
-        score += 0.05
+        score += 0.025
 
     if "total" in parsed:
-        score += 0.05
+        score += 0.025
 
     items = parsed.get("line_items")
     if not isinstance(items, list):
         return score
 
-    score += 0.05
+    score += 0.025
 
     if not items:
         return score
@@ -109,9 +112,9 @@ def _schema_score(parsed) -> float:
         if isinstance(item, dict) and REQUIRED_ITEM_KEYS.issubset(item.keys())
     )
 
-    score += 0.15 * (well_formed / len(items))
+    score += 0.075 * (well_formed / len(items))
 
-    return min(0.30, score)
+    return min(0.15, score)
 
 
 def _content_score(parsed: dict, gt: dict) -> float:
@@ -123,25 +126,25 @@ def _content_score(parsed: dict, gt: dict) -> float:
 
     if isinstance(pred_items, list) and isinstance(gt_items, list) and gt_items:
         ratio = min(len(pred_items), len(gt_items)) / max(len(pred_items), len(gt_items))
-        score += 0.10 * ratio
+        score += 0.20 * ratio
 
     pred_total = _digits_only(parsed.get("total", ""))
     gt_total = _digits_only(gt.get("total", ""))
 
     if pred_total and gt_total:
         if pred_total == gt_total:
-            score += 0.10
+            score += 0.20
         elif pred_total in gt_total or gt_total in pred_total:
-            score += 0.04
+            score += 0.08
 
     pred_names = _name_tokens(pred_items)
     gt_names = _name_tokens(gt_items)
 
     if pred_names and gt_names:
         overlap = len(pred_names & gt_names) / len(gt_names)
-        score += 0.10 * min(1.0, overlap)
+        score += 0.20 * min(1.0, overlap)
 
-    return min(0.30, score)
+    return min(0.60, score)
 
 
 def _hallucination_penalty(text: str, parsed: dict, gt: dict) -> float:
@@ -178,6 +181,11 @@ def _hallucination_penalty(text: str, parsed: dict, gt: dict) -> float:
     if pred_total and gt_total and pred_total != gt_total:
         # check for any partial match of digits. if overlap of digits  is not 50% or more then penalize more
         overlap = len(set(pred_total) & set(gt_total)) / max(len(set(pred_total)), len(set(gt_total)))
+        if overlap < 0.5:
+            penalty -= 0.10
+        else:
+            penalty -= 0.05
+
 
 
     if _repeated_char_ratio(text) > 0.50:
