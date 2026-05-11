@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vlm.configs.paths import EXPERIMENTS_DIR
+from vlm.configs.paths import RUNS_DIR
 
 
 @dataclass
@@ -76,7 +76,7 @@ class TrainingConfig:
 
     @property
     def root_dir(self) -> Path:
-        return EXPERIMENTS_DIR / self.name
+        return RUNS_DIR / self.name
 
     @property
     def sft_checkpoint_dir(self) -> Path:

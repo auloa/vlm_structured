@@ -8,12 +8,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RL training.")
 
     parser.add_argument(
-        "--experiment",
-        "-e",
+        "--config",
+        "-c",
         type=str,
         default="receipt-base",
         choices=sorted(TRAINING_CONFIGS),
-        help="Experiment config name.",
+        help="Run config name.",
     )
 
     return parser.parse_args()
@@ -21,9 +21,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = get_training_config(args.experiment)
+    cfg = get_training_config(args.config)
 
-    print(f"running RL experiment: {cfg.name}")
+    print(f"running RL config: {cfg.name}")
     print(f"loading SFT checkpoint from: {cfg.sft_best_checkpoint}")
 
     train_rl(cfg)

@@ -6,18 +6,18 @@ ConfigFactory = Callable[[], TrainingConfig]
 TRAINING_CONFIGS: dict[str, ConfigFactory] = {}
 
 
-def _experiment_name(fn: Callable) -> str:
+def _run_config_name(fn: Callable) -> str:
     return fn.__name__
 
 
-def register_experiment(fn: Callable[[str], TrainingConfig]) -> ConfigFactory:
-    """Register an experiment using the function name.
+def register_config(fn: Callable[[str], TrainingConfig]) -> ConfigFactory:
+    """Register an run config using the function name.
 
     Example:
         receipt_base -> "receipt-base"
         stronger_sft -> "stronger-sft"
     """
-    name = _experiment_name(fn)
+    name = _run_config_name(fn)
 
     def wrapped() -> TrainingConfig:
         return fn(name)
@@ -27,10 +27,10 @@ def register_experiment(fn: Callable[[str], TrainingConfig]) -> ConfigFactory:
 
 
 def _base_receipt_config(name: str) -> TrainingConfig:
-    """Base receipt-extraction experiment.
+    """Base receipt-extraction configuration.
 
     This is intentionally explicit so the full training setup is easy to review
-    in one place. Individual experiments should only override fields that differ.
+    in one place. Individual configuration should only override fields that differ.
     """
     cfg = TrainingConfig(name=name)
 
@@ -87,7 +87,7 @@ def _base_receipt_config(name: str) -> TrainingConfig:
     return cfg
 
 
-@register_experiment
+@register_config
 def debug(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
 
@@ -110,7 +110,7 @@ def debug(name: str) -> TrainingConfig:
 
     return cfg
 
-@register_experiment
+@register_config
 def receipt_base(name: str) -> TrainingConfig:
     return _base_receipt_config(name)
 
@@ -122,4 +122,4 @@ def get_training_config(name: str) -> TrainingConfig:
         return TRAINING_CONFIGS[name]()
     except KeyError as exc:
         available = ", ".join(sorted(TRAINING_CONFIGS))
-        raise ValueError(f"Unknown experiment '{name}'. Available: {available}") from exc
+        raise ValueError(f"Unknown config '{name}'. Available: {available}") from exc

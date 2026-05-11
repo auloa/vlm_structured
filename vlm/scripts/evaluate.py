@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from vlm.configs.experiments import EXPERIMENTS, get_experiment
+from vlm.configs.training_configs import TRAINING_CONFIGS, get_training_config
 from vlm.evaluation.evaluate import compare_sft_and_rl, evaluate_checkpoint
 
 
@@ -9,12 +9,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate receipt JSON extraction.")
 
     parser.add_argument(
-        "--experiment",
-        "-e",
+        "--config",
+        "-c",
         type=str,
-        default="receipt-base",
-        choices=sorted(EXPERIMENTS),
-        help="Experiment config name.",
+        default="receipt_base",
+        choices=sorted(TRAINING_CONFIGS),
+        help="Run config name.",
     )
 
     parser.add_argument(
@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = get_experiment(args.experiment)
+    cfg = get_training_config(args.config)
 
     if args.stage == "both":
         compare_sft_and_rl(
