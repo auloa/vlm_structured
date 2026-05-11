@@ -31,11 +31,7 @@ class RewardBreakdown:
 
 
 REQUIRED_TOP_KEYS = {"line_items", "total"}
-
-# `count` is intentionally optional: the dataset only emits it when the
-# receipt actually shows a quantity, so requiring it would punish the
-# model for faithfully matching the image.
-REQUIRED_ITEM_KEYS = {"name", "price"}
+REQUIRED_ITEM_KEYS = {"name", "count", "price"}
 
 
 def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
@@ -43,15 +39,11 @@ def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
     generated = generated.strip()
 
     parsed = parse_json_object(generated)
-    gt = parse_json_object(ground_truth)
-    if not isinstance(gt, dict):
-        gt = {}
+    gt = parse_json_object(ground_truth) or {}
 
     format_score = _format_score(generated, parsed)
 
-    # parsed is None (unparseable) or not a dict (e.g. top-level JSON list).
-    # Neither can satisfy our receipt schema, so format credit only.
-    if not isinstance(parsed, dict):
+    if parsed is None:
         return RewardBreakdown(
             total=max(0.0, min(1.0, format_score)),
             format=format_score,
@@ -76,23 +68,17 @@ def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
 
 
 def _format_score(text: str, parsed) -> float:
-    """Reward strict JSON.
-
-    The assignment defines format adherence as "successfully parse as valid
-    JSON", which means json.loads on the entire output must succeed. We give
-    full credit only to strict JSON and a small consolation signal to
-    parseable-but-wrapped JSON so RL still sees a gradient toward "remove
-    the prose wrapper". Everything else gets zero.
-    """
+    """Reward clean JSON most, wrapped-but-parseable JSON less."""
     if parsed is None:
-        return 0.0
+        looks_jsonish = "{" in text and "}" in text
+        return 0.10 if looks_jsonish else 0.0
 
-    # Strict JSON: the full generated string is the JSON object.
-    if text.startswith("{") and text.endswith("}") and parse_json_object(text) is not None:
+    # Clean JSON: the full generated string is the JSON object.
+    if parse_json_object(text) is not None and text.startswith("{") and text.endswith("}"):
         return 0.30
 
-    # JSON exists but is wrapped in prose. Small partial credit only.
-    return 0.05
+    # Parseable JSON exists, but the model added extra prose around it.
+    return 0.20
 
 
 def _schema_score(parsed) -> float:
@@ -166,7 +152,7 @@ def _hallucination_penalty(text: str, parsed: dict, gt: dict) -> float:
 
     if isinstance(items, list) and len(items) > 1:
         signatures = [
-            (_norm(item.get("name", "")), _digits_only(item.get("price", "")))
+            _norm(item.get("name", ""))
             for item in items
             if isinstance(item, dict)
         ]
@@ -185,6 +171,14 @@ def _hallucination_penalty(text: str, parsed: dict, gt: dict) -> float:
 
     if "<|user|>" in text or "<|assistant|>" in text:
         penalty -= 0.10
+
+    # Penalize when the total digits don't match ground truth at all.
+    pred_total = _digits_only(parsed.get("total", ""))
+    gt_total = _digits_only(gt.get("total", ""))
+    if pred_total and gt_total and pred_total != gt_total:
+        # check for any partial match of digits. if overlap of digits  is not 50% or more then penalize more
+        overlap = len(set(pred_total) & set(gt_total)) / max(len(set(pred_total)), len(set(gt_total)))
+
 
     if _repeated_char_ratio(text) > 0.50:
         penalty -= 0.05

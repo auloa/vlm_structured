@@ -216,3 +216,19 @@ Starts from the SFT checkpoint. For each image:
 | Gradient clipping | 0.5 |
 
 The KL term uses Schulman's k3 estimator applied per token, then masked-averaged. This is REINFORCE with group-relative advantages and a KL anchor — no PPO clipping, since with a single update step per batch and projector-only training it adds no real benefit.
+
+
+## Reward
+
+Four components, total clipped to [0, 1]:
+
+| Component | Range | What it measures |
+|---|---|---|
+| format | 0–0.30 | 0.30 for strict JSON, 0.05 for parseable-but-wrapped, 0 otherwise |
+| schema | 0–0.30 | Required top-level keys and well-formed line items |
+| content | 0–0.30 | Line item count similarity, total digit match, name token overlap |
+| hallucination | ≤ 0 | Duplicates, leaked chat tokens, repeated-character runs, excessive output |
+
+The format reward is tied to the eval metric — the assignment defines format adherence as `json.loads` succeeding on the full output, so full credit only goes to strict JSON. Wrapped output gets a small partial credit so RL still has a gradient pointing at "drop the wrapper."
+
+`count` is not among the required item keys. The dataset only emits it when the receipt shows a quantity, so requiring it would penalize outputs that correctly match the image.
