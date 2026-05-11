@@ -24,6 +24,7 @@ def train_sft(cfg: TrainingConfig) -> None:
     data = cfg.data
     vision = cfg.vision
     model_cfg = cfg.model
+    projector_cfg = cfg.projector
     sft = cfg.sft
 
     assert sft.grad_accum_steps >= 1, "grad_accum_steps must be >= 1"
@@ -42,6 +43,12 @@ def train_sft(cfg: TrainingConfig) -> None:
         image_height=vision.image_height,
         image_width=vision.image_width,
         lm_name=model_cfg.lm_name,
+        cross_attention_projector=projector_cfg.cross_attention,
+        cross_attention_projector_num_queries=projector_cfg.num_queries,
+        cross_attention_projector_num_heads=projector_cfg.num_heads,
+        cross_attention_projector_num_layers=projector_cfg.num_layers,
+        cross_attention_projector_ffn_mult=projector_cfg.ffn_mult,
+        projector_mult=projector_cfg.projector_mult,
     )
 
     tokenizer = prepare_tokenizer(model.lm.tokenizer)

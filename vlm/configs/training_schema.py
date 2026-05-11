@@ -29,6 +29,14 @@ class LMConfig:
         "Extract the tabular data from this document and output it in JSON format.\nAssistant:"
     )
 
+@dataclass
+class ProjectorConfig:
+    cross_attention: bool = False
+    num_queries: int = 64
+    num_heads: int = 8
+    num_layers: int = 2
+    ffn_mult: int = 4
+    projector_mult: int = 2
 
 @dataclass
 class SFTConfig:
@@ -70,6 +78,7 @@ class TrainingConfig:
     data: DataConfig = field(default_factory=DataConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     model: LMConfig = field(default_factory=LMConfig)
+    proj: ProjectorConfig = field(default_factory=ProjectorConfig)
     sft: SFTConfig = field(default_factory=SFTConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)

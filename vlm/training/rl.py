@@ -29,6 +29,7 @@ def train_rl(cfg: TrainingConfig) -> None:
     data = cfg.data
     vision = cfg.vision
     model_cfg = cfg.model
+    projector_cfg = cfg.projector
     rl = cfg.rl
 
     device = get_device()
@@ -51,6 +52,12 @@ def train_rl(cfg: TrainingConfig) -> None:
         image_height=vision.image_height,
         image_width=vision.image_width,
         lm_name=model_cfg.lm_name,
+        cross_attention_projector=projector_cfg.cross_attention_projector,
+        cross_attention_projector_num_queries=projector_cfg.cross_attention_projector_num_queries,
+        cross_attention_projector_num_heads=projector_cfg.cross_attention_projector_num_heads,
+        cross_attention_projector_num_layers=projector_cfg.cross_attention_projector_num_layers,
+        cross_attention_projector_ffn_mult=projector_cfg.cross_attention_projector_ffn_mult,
+        projector_mult=projector_cfg.projector_ffn_mult,
     )
 
     ckpt = torch.load(cfg.sft_best_checkpoint, map_location=device)

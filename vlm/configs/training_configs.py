@@ -55,6 +55,14 @@ def _base_receipt_config(name: str) -> TrainingConfig:
     cfg.model.instruction = (
         "Extract the tabular data from this document and output it in JSON format."
     )
+    # Projector
+    cfg.projector.cross_attention = False
+    cfg.projector.num_queries = 64
+    cfg.projector.num_heads = 8
+    cfg.projector.num_layers = 2
+    cfg.projector.ffn_mult = 4
+    cfg.projector.projector_mult = 2
+
 
     # Supervised fine-tuning
     cfg.sft.epochs = 15
@@ -117,11 +125,13 @@ def receipt_base(name: str) -> TrainingConfig:
 @register_config
 def cross_attention_projection(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
+    cfg.projector.cross_attention = True
     return cfg
 
 @register_config
 def qwen_ca(name: str) -> TrainingConfig:
     cfg = _base_receipt_config(name)
+    cfg.projector.cross_attention = True
     cfg.model.lm_name = "Qwen/Qwen2.5-1.5B-Instruct"
     return cfg
 
