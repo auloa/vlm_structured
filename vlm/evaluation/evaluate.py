@@ -12,6 +12,7 @@ from vlm.configs.training_schema import TrainingConfig
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
 from vlm.training.common import (
+    build_instruction,
     ensure_dir,
     prepare_tokenizer,
     set_projector_only_trainable,
@@ -93,6 +94,7 @@ def evaluate_checkpoint(
     )
 
     tokenizer = prepare_tokenizer(model.lm.tokenizer)
+    instruction = build_instruction(tokenizer, cfg.model.instruction)
 
     dataset = CORDDataset(
         split=cfg.data.test_split,
@@ -120,7 +122,7 @@ def evaluate_checkpoint(
                 model=model,
                 image=image,
                 tokenizer=tokenizer,
-                instruction=cfg.model.instruction,
+                instruction=instruction,
                 max_completion_tokens=max_completion_tokens,
                 temperature=temperature,
                 do_sample=do_sample,

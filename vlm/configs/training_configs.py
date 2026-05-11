@@ -51,9 +51,9 @@ def _base_receipt_config(name: str) -> TrainingConfig:
 
     # Language model / prompt
     cfg.model.lm_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
     cfg.model.instruction = (
-        "Extract the tabular data from this document and output it in JSON format.\n"
-        "Assistant:"
+        "Extract the tabular data from this document and output it in JSON format."
     )
 
     # Supervised fine-tuning

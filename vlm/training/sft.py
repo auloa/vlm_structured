@@ -10,6 +10,7 @@ from vlm.data.collator import CORDCollator
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
 from vlm.training.common import (
+    build_instruction,
     ensure_dir,
     log_text,
     prepare_tokenizer,
@@ -44,6 +45,7 @@ def train_sft(cfg: TrainingConfig) -> None:
     )
 
     tokenizer = prepare_tokenizer(model.lm.tokenizer)
+    instruction = build_instruction(tokenizer, model_cfg.instruction)
     set_projector_only_trainable(model)
 
     print("loading datasets...")
@@ -69,7 +71,7 @@ def train_sft(cfg: TrainingConfig) -> None:
 
     collator = CORDCollator(
         tokenizer=tokenizer,
-        instruction=model_cfg.instruction,
+        instruction=instruction,
         max_target_length=sft.max_target_length,
     )
 
@@ -196,7 +198,7 @@ def train_sft(cfg: TrainingConfig) -> None:
                         model=model,
                         batch=batch,
                         tokenizer=tokenizer,
-                        instruction=model_cfg.instruction,
+                        instruction=instruction,
                         device=device,
                         global_step=global_step,
                         writer=writer,

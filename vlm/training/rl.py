@@ -8,6 +8,7 @@ from vlm.configs.training_schema import TrainingConfig
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
 from vlm.training.common import (
+    build_instruction,
     ensure_dir,
     log_text,
     prepare_tokenizer,
@@ -72,6 +73,7 @@ def train_rl(cfg: TrainingConfig) -> None:
     print(f"dataset ready: {len(dataset)} samples")
 
     tokenizer = prepare_tokenizer(model.lm.tokenizer)
+    instruction = build_instruction(tokenizer, model_cfg.instruction)
 
     loader = DataLoader(
         dataset,
@@ -110,7 +112,7 @@ def train_rl(cfg: TrainingConfig) -> None:
                         model=model,
                         image=image,
                         tokenizer=tokenizer,
-                        instruction=model_cfg.instruction,
+                        instruction=instruction,
                         k=rl.completions_per_image,
                         max_completion_tokens=rl.max_completion_tokens,
                         temperature=rl.temperature,
@@ -179,7 +181,7 @@ def train_rl(cfg: TrainingConfig) -> None:
                         image=image,
                         completions=gen.texts,
                         tokenizer=tokenizer,
-                        instruction=model_cfg.instruction,
+                        instruction=instruction,
                         projector=ref_projector,
                         max_completion_length=rl.max_completion_tokens,
                         require_grad=False,
@@ -192,7 +194,7 @@ def train_rl(cfg: TrainingConfig) -> None:
                         image=image,
                         completions=gen.texts,
                         tokenizer=tokenizer,
-                        instruction=model_cfg.instruction,
+                        instruction=instruction,
                         projector=model.projector,
                         max_completion_length=rl.max_completion_tokens,
                         require_grad=True,
@@ -324,7 +326,7 @@ def _log_metrics(
     ) / max(1, len(breakdowns))
 
     parseable_or_wrapped_json_rate = sum(
-        b.format >= 0.20 for b in breakdowns
+        b.format >= 0.05 for b in breakdowns
     ) / max(1, len(breakdowns))
 
     schema_rate = sum(

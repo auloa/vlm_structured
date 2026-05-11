@@ -180,24 +180,33 @@ def compute_pg_kl_loss(
     advantages,
     beta: float,
 ):
-    """Group-relative policy-gradient loss with KL regularization."""
+    """Group-relative policy-gradient loss with KL regularization.
+
+    Policy term: GRPO objective without PPO clipping. For each sample we use
+    the per-token-mean log-prob of the completion, weighted by its
+    group-relative advantage, then averaged across the group.
+
+    KL term: per-token Schulman k3 estimator, exp(r) - r - 1, where
+    r = log pi_ref - log pi_policy. Computing k3 per token and then
+    masked-averaging gives the true KL; computing it on sequence-averaged
+    log-probs would understate token-level divergence because k3 is convex.
+    """
     advantages = advantages.detach()
 
     token_counts = token_mask.sum(dim=1).clamp_min(1.0)
+    total_tokens = token_mask.sum().clamp_min(1.0)
 
+    # Policy loss.
     policy_seq_log_probs = (
         policy_token_log_probs * token_mask
     ).sum(dim=1) / token_counts
 
-    ref_seq_log_probs = (
-        ref_token_log_probs * token_mask
-    ).sum(dim=1) / token_counts
-
     policy_loss = -(advantages * policy_seq_log_probs).mean()
 
-    log_ratio_ref = ref_seq_log_probs - policy_seq_log_probs
-    kl_per_sample = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
-    kl_loss = kl_per_sample.mean()
+    # KL loss: per-token, then masked mean.
+    log_ratio = ref_token_log_probs - policy_token_log_probs
+    kl_per_token = torch.exp(log_ratio) - log_ratio - 1.0
+    kl_loss = (kl_per_token * token_mask).sum() / total_tokens
 
     loss = policy_loss + beta * kl_loss
 

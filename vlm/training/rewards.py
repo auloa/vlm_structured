@@ -43,11 +43,15 @@ def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
     generated = generated.strip()
 
     parsed = parse_json_object(generated)
-    gt = parse_json_object(ground_truth) or {}
+    gt = parse_json_object(ground_truth)
+    if not isinstance(gt, dict):
+        gt = {}
 
     format_score = _format_score(generated, parsed)
 
-    if parsed is None:
+    # parsed is None (unparseable) or not a dict (e.g. top-level JSON list).
+    # Neither can satisfy our receipt schema, so format credit only.
+    if not isinstance(parsed, dict):
         return RewardBreakdown(
             total=max(0.0, min(1.0, format_score)),
             format=format_score,
@@ -72,17 +76,23 @@ def compute_reward(generated: str, ground_truth: str) -> RewardBreakdown:
 
 
 def _format_score(text: str, parsed) -> float:
-    """Reward clean JSON most, wrapped-but-parseable JSON less."""
-    if parsed is None:
-        looks_jsonish = "{" in text and "}" in text
-        return 0.10 if looks_jsonish else 0.0
+    """Reward strict JSON.
 
-    # Clean JSON: the full generated string is the JSON object.
-    if parse_json_object(text) is not None and text.startswith("{") and text.endswith("}"):
+    The assignment defines format adherence as "successfully parse as valid
+    JSON", which means json.loads on the entire output must succeed. We give
+    full credit only to strict JSON and a small consolation signal to
+    parseable-but-wrapped JSON so RL still sees a gradient toward "remove
+    the prose wrapper". Everything else gets zero.
+    """
+    if parsed is None:
+        return 0.0
+
+    # Strict JSON: the full generated string is the JSON object.
+    if text.startswith("{") and text.endswith("}") and parse_json_object(text) is not None:
         return 0.30
 
-    # Parseable JSON exists, but the model added extra prose around it.
-    return 0.20
+    # JSON exists but is wrapped in prose. Small partial credit only.
+    return 0.05
 
 
 def _schema_score(parsed) -> float:
