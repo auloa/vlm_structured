@@ -47,13 +47,12 @@ class CORDCollator:
         eos = self.tokenizer.eos_token or ""
         label_strings = [sample["label"] + eos for sample in batch]
 
-        # Long targets are filtered in CORDDataset, so truncation is disabled.
-        # If a too-long target slips through, this avoids silently cutting labels.
         target_tokens = self.tokenizer(
             label_strings,
             return_tensors="pt",
             padding="max_length",
-            truncation=False,
+            truncation=False, # length is controlled by max_target_length,
+                              # and we want to ensure truncation happens at the end of the target, not the instruction
             max_length=self.max_target_length,
             add_special_tokens=False,
         )
