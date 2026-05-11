@@ -78,7 +78,7 @@ class TrainingConfig:
     data: DataConfig = field(default_factory=DataConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     model: LMConfig = field(default_factory=LMConfig)
-    proj: ProjectorConfig = field(default_factory=ProjectorConfig)
+    projector: ProjectorConfig = field(default_factory=ProjectorConfig)
     sft: SFTConfig = field(default_factory=SFTConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
