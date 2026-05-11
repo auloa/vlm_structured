@@ -13,12 +13,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
-from transformers import DonutProcessor, VisionEncoderDecoderModel
-
 from PIL import Image
-
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 from vlm.data.dataset import CORDDataset
-
 
 # ── inference helpers ────────────────────────────────────────────────────────
 
@@ -41,7 +38,7 @@ def load_model_and_processor(width: int, height: int):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device).eval()
-    print(f"Model on {device} | image size: {height}h × {width}w")
+    print(f"Model on {device} | image size: {height}h X {width}w")
     return processor, model, device
 
 

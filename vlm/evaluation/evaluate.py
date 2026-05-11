@@ -8,7 +8,6 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
 from vlm.configs.training_schema import TrainingConfig
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
@@ -17,10 +16,10 @@ from vlm.training.common import (
     prepare_tokenizer,
     set_projector_only_trainable,
 )
-from vlm.training.rewards import compute_reward, extract_json
+from vlm.training.rewards import compute_reward
 from vlm.utils.device import get_device
+from vlm.utils.json_extractor import extract_json_object
 from vlm.utils.training import set_seed
-
 
 REQUIRED_KEYS = {"line_items", "total"}
 
@@ -265,7 +264,7 @@ def generate_one(
     input_ids = prompt_tokens["input_ids"].to(device)
     attention_mask = prompt_tokens["attention_mask"].to(device)
 
-    with torch.inference_mode():
+    with torch.no_grad():
         inputs_embeds, full_attention_mask = model.prepare_inputs_embeds(
             images=[image],
             input_ids=input_ids,
@@ -302,7 +301,7 @@ def score_prediction(
     ground_truth: str,
 ) -> SampleEval:
     strict_parsed = _loads_exact_json(prediction)
-    extracted = extract_json(prediction)
+    extracted = extract_json_object(prediction)
     extracted_parsed = _loads_exact_json(extracted) if extracted is not None else None
 
     parsed_for_schema = strict_parsed if strict_parsed is not None else extracted_parsed

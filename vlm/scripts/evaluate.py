@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from vlm.configs.training_configs import TRAINING_CONFIGS, get_experiment
+from vlm.configs.experiments import EXPERIMENTS, get_experiment
 from vlm.evaluation.evaluate import compare_sft_and_rl, evaluate_checkpoint
 
 
@@ -12,8 +12,8 @@ def parse_args() -> argparse.Namespace:
         "--experiment",
         "-e",
         type=str,
-        default="debug",
-        choices=sorted(TRAINING_CONFIGS),
+        default="receipt-base",
+        choices=sorted(EXPERIMENTS),
         help="Experiment config name.",
     )
 
@@ -39,19 +39,6 @@ def parse_args() -> argparse.Namespace:
         help="Number of held-out test examples to evaluate.",
     )
 
-    parser.add_argument(
-        "--max-completion-tokens",
-        type=int,
-        default=None,
-        help="Maximum number of generated completion tokens.",
-    )
-
-    parser.add_argument(
-        "--sample",
-        action="store_true",
-        help="Use sampling during evaluation. Default is deterministic greedy decoding.",
-    )
-
     return parser.parse_args()
 
 
@@ -59,13 +46,10 @@ def main() -> None:
     args = parse_args()
     cfg = get_experiment(args.experiment)
 
-    print(f"running evaluation for experiment: {cfg.name}")
-
     if args.stage == "both":
         compare_sft_and_rl(
             cfg=cfg,
             num_samples=args.num_samples,
-            max_completion_tokens=args.max_completion_tokens,
         )
         return
 
@@ -83,8 +67,6 @@ def main() -> None:
         checkpoint_path=checkpoint_path,
         stage=args.stage,
         num_samples=args.num_samples,
-        max_completion_tokens=args.max_completion_tokens,
-        do_sample=args.sample,
     )
 
 

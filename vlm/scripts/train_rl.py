@@ -1,6 +1,6 @@
 import argparse
 
-from vlm.configs.experiments import EXPERIMENTS, get_experiment
+from vlm.configs.training_configs import TRAINING_CONFIGS, get_training_config
 from vlm.training.rl import train_rl
 
 
@@ -12,7 +12,7 @@ def parse_args() -> argparse.Namespace:
         "-e",
         type=str,
         default="receipt-base",
-        choices=sorted(EXPERIMENTS),
+        choices=sorted(TRAINING_CONFIGS),
         help="Experiment config name.",
     )
 
@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cfg = get_experiment(args.experiment)
+    cfg = get_training_config(args.experiment)
 
     print(f"running RL experiment: {cfg.name}")
     print(f"loading SFT checkpoint from: {cfg.sft_best_checkpoint}")

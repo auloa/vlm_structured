@@ -1,16 +1,15 @@
 import base64
 import html
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-import re
 
 import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
 from vlm.training.generate import generate_k_outputs

@@ -4,7 +4,6 @@ import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
 from vlm.configs.training_schema import TrainingConfig
 from vlm.data.dataset import CORDDataset
 from vlm.models.receipt_vlm import ReceiptVLM
@@ -106,7 +105,7 @@ def train_rl(cfg: TrainingConfig) -> None:
                 # 1. Generate K completions from the current policy.
                 model.projector.eval()
 
-                with torch.inference_mode():
+                with torch.no_grad():
                     gen = generate_k_outputs(
                         model=model,
                         image=image,
@@ -174,7 +173,7 @@ def train_rl(cfg: TrainingConfig) -> None:
                     continue
 
                 # 4. Score completions under frozen SFT reference projector.
-                with torch.inference_mode():
+                with torch.no_grad():
                     ref_token_log_probs, token_mask = compute_completion_token_log_probs(
                         model=model,
                         image=image,
@@ -313,41 +312,40 @@ def _log_metrics(
 ) -> None:
     mean_reward = rewards.mean().item()
 
-    json_valid_rate = sum(
-        b.json_valid > 0 for b in breakdowns
+    mean_format = sum(b.format for b in breakdowns) / max(1, len(breakdowns))
+    mean_schema = sum(b.schema for b in breakdowns) / max(1, len(breakdowns))
+    mean_content = sum(b.content for b in breakdowns) / max(1, len(breakdowns))
+    mean_hallucination = sum(b.hallucination for b in breakdowns) / max(
+        1, len(breakdowns)
+    )
+
+    clean_json_rate = sum(
+        b.format >= 0.30 for b in breakdowns
+    ) / max(1, len(breakdowns))
+
+    parseable_or_wrapped_json_rate = sum(
+        b.format >= 0.20 for b in breakdowns
     ) / max(1, len(breakdowns))
 
     schema_rate = sum(
-        b.schema > 0.1 for b in breakdowns
+        b.schema >= 0.30 for b in breakdowns
     ) / max(1, len(breakdowns))
 
     writer.add_scalar("rl/reward/mean", mean_reward, global_step)
-    writer.add_scalar("rl/reward/json_valid_rate", json_valid_rate, global_step)
+    writer.add_scalar("rl/reward/clean_json_rate", clean_json_rate, global_step)
+    writer.add_scalar(
+        "rl/reward/parseable_or_wrapped_json_rate",
+        parseable_or_wrapped_json_rate,
+        global_step,
+    )
     writer.add_scalar("rl/reward/schema_rate", schema_rate, global_step)
 
+    writer.add_scalar("rl/reward_components/format", mean_format, global_step)
+    writer.add_scalar("rl/reward_components/schema", mean_schema, global_step)
+    writer.add_scalar("rl/reward_components/content", mean_content, global_step)
     writer.add_scalar(
-        "rl/reward_components/json_like",
-        sum(b.json_like for b in breakdowns) / max(1, len(breakdowns)),
-        global_step,
-    )
-    writer.add_scalar(
-        "rl/reward_components/line_items_populated",
-        sum(b.line_items_populated for b in breakdowns) / max(1, len(breakdowns)),
-        global_step,
-    )
-    writer.add_scalar(
-        "rl/reward_components/content",
-        sum(b.content for b in breakdowns) / max(1, len(breakdowns)),
-        global_step,
-    )
-    writer.add_scalar(
-        "rl/reward_components/anti_hallucination",
-        sum(b.anti_hallucination for b in breakdowns) / max(1, len(breakdowns)),
-        global_step,
-    )
-    writer.add_scalar(
-        "rl/reward_components/total_match",
-        sum(b.total_match for b in breakdowns) / max(1, len(breakdowns)),
+        "rl/reward_components/hallucination",
+        mean_hallucination,
         global_step,
     )
 
@@ -358,7 +356,7 @@ def _log_metrics(
             f"step {global_step:4d} | "
             f"batch {step + 1}/{total_steps} | "
             f"reward {mean_reward:.3f} | "
-            f"json {json_valid_rate:.0%} | "
+            f"json {clean_json_rate:.0%} | "
             f"schema {schema_rate:.0%} | "
             f"skipped update: identical rewards"
         )
@@ -373,13 +371,15 @@ def _log_metrics(
         f"step {global_step:4d} | "
         f"batch {step + 1}/{total_steps} | "
         f"reward {mean_reward:.3f} | "
-        f"json {json_valid_rate:.0%} | "
+        f"json {clean_json_rate:.0%} | "
         f"schema {schema_rate:.0%} | "
+        f"format {mean_format:.3f} | "
+        f"content {mean_content:.3f} | "
+        f"hallucination {mean_hallucination:.3f} | "
         f"policy {policy_loss.item():.4f} | "
         f"kl {kl_loss.item():.4f} | "
         f"loss {loss.item():.4f}"
     )
-
 
 def _log_sample(gen, rewards, ground_truth, global_step, writer) -> None:
     best_idx = rewards.argmax().item()

@@ -5,7 +5,6 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import get_cosine_schedule_with_warmup
-
 from vlm.configs.training_schema import TrainingConfig
 from vlm.data.collator import CORDCollator
 from vlm.data.dataset import CORDDataset
@@ -17,7 +16,7 @@ from vlm.training.common import (
     set_projector_only_trainable,
 )
 from vlm.utils.device import get_device
-from vlm.utils.training import get_autocast
+from vlm.utils.training import get_autocast, set_seed
 
 
 def train_sft(cfg: TrainingConfig) -> None:
@@ -28,6 +27,7 @@ def train_sft(cfg: TrainingConfig) -> None:
 
     assert sft.grad_accum_steps >= 1, "grad_accum_steps must be >= 1"
 
+    set_seed(42)
     device = get_device()
     checkpoint_dir = ensure_dir(cfg.sft_checkpoint_dir)
 
@@ -276,7 +276,7 @@ def _validate(model, val_loader) -> float:
 
     total_loss = 0.0
 
-    with torch.inference_mode():
+    with torch.no_grad():
         for batch in val_loader:
             with get_autocast(model.device):
                 output = model(
@@ -319,7 +319,7 @@ def _log_sample(
     input_ids = prompt_tokens["input_ids"].to(device)
     attention_mask = prompt_tokens["attention_mask"].to(device)
 
-    with torch.inference_mode():
+    with torch.no_grad():
         inputs_embeds, full_attention_mask = model.prepare_inputs_embeds(
             images=[batch.images[0]],
             input_ids=input_ids,

@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+from pathlib import Path
+
 from vlm.configs.paths import EXPERIMENTS_DIR
 
 

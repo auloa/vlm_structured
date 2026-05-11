@@ -1,8 +1,8 @@
 import json
+
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
-
 from vlm.data.dataset import parse_ground_truth
 
 DATASET_NAME = "naver-clova-ix/cord-v2"

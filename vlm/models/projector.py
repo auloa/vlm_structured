@@ -16,5 +16,4 @@ class Projector(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        orig_dtype = x.dtype
-        return self.net(x.float()).to(orig_dtype)
+        return self.net(x.float())

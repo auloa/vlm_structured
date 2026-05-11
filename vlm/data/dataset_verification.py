@@ -1,18 +1,16 @@
 import json
-from pathlib import Path
 import tkinter as tk
+from pathlib import Path
 from tkinter import ttk
 from typing import Any
 
 import torch
 from datasets import load_dataset
 from PIL import Image, ImageTk
-
 from vlm.config import DEFAULT_CONFIG
 from vlm.data.dataset import parse_ground_truth
 from vlm.models.vision_encoder import DonutVisionEncoder
 from vlm.utils.device import get_device
-
 
 FLAGS_PATH = Path("data/flagged_cord_raw_images.jsonl")
 PROCESSED_IMAGE_DIR = Path("data/cord_processed_review_images")
@@ -230,7 +228,7 @@ class RawCORDImageFlagger:
         if not self.output_path.exists():
             return flags
 
-        with open(self.output_path, "r", encoding="utf-8") as f:
+        with open(self.output_path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     item = json.loads(line)

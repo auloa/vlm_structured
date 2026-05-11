@@ -2,7 +2,6 @@ import copy
 
 import torch
 import torch.nn.functional as F
-
 from vlm.models.receipt_vlm import ReceiptVLM
 
 
@@ -20,14 +19,17 @@ def get_visual_embeddings_with_projector(
     projector,
     require_grad: bool,
 ) -> torch.Tensor:
-    """Encode image with frozen vision encoder, then apply selected projector."""
-    with torch.inference_mode():
+    """Encode image with frozen vision encoder, then apply selected projector.
+
+    Gradients flow only through the projector when require_grad=True.
+    """
+    with torch.no_grad():
         visual_features = model.vision_encoder([image])
 
     if require_grad:
         visual_embeddings = projector(visual_features)
     else:
-        with torch.inference_mode():
+        with torch.no_grad():
             visual_embeddings = projector(visual_features)
 
     return visual_embeddings.float()
@@ -105,7 +107,7 @@ def compute_completion_token_log_probs(
     prompt_ids = prompt_ids.expand(k, -1)
     prompt_mask = prompt_mask.expand(k, -1)
 
-    with torch.inference_mode():
+    with torch.no_grad():
         prompt_embeds = model.lm.model.get_input_embeddings()(prompt_ids).float()
 
         if completion_input_ids.shape[1] > 0:
@@ -144,7 +146,7 @@ def compute_completion_token_log_probs(
             attention_mask=attention_mask,
         )
     else:
-        with torch.inference_mode():
+        with torch.no_grad():
             outputs = model.lm.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,

@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import torch
 from PIL import Image
-
 from vlm.models.receipt_vlm import ReceiptVLM
 
 
@@ -22,7 +21,6 @@ def generate_k_outputs(
     do_sample: bool = True,
 ) -> GenerationOutput:
     device = model.device
-    model.eval()
 
     prompt_tokens = tokenizer(
         instruction,
@@ -46,10 +44,7 @@ def generate_k_outputs(
             attention_mask=attention_mask,
         )
 
-        # For generate(), max_length is total length:
-        # visual tokens + prompt tokens + generated completion tokens.
-        total_prefix_len = inputs_embeds.shape[1]
-        max_length = total_prefix_len + max_completion_tokens
+        max_length = inputs_embeds.shape[1] + max_completion_tokens
 
         generate_kwargs = {
             "inputs_embeds": inputs_embeds,

@@ -17,7 +17,6 @@ from PIL import Image, ImageDraw
 # ── import or paste your encoder ─────────────────────────────────────────────
 from vlm.models.vision_encoder import DonutVisionEncoder
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def make_dummy_image(w: int, h: int, text: str = "") -> Image.Image:
@@ -25,7 +24,7 @@ def make_dummy_image(w: int, h: int, text: str = "") -> Image.Image:
     img = Image.new("RGB", (w, h), color=(245, 245, 240))
     draw = ImageDraw.Draw(img)
     # fake receipt-like lines
-    for i, y in enumerate(range(40, h - 40, 30)):
+    for _i, y in enumerate(range(40, h - 40, 30)):
         draw.rectangle([30, y, w - 30, y + 18], fill=(220, 220, 215))
     if text:
         draw.text((10, 10), text, fill=(0, 0, 0))
@@ -47,10 +46,10 @@ def check_output_shape(encoder, img_shape):
     with torch.no_grad():
         out = encoder([img])
     B, N, D = out.shape
-    print(f"  input image : {h}h × {w}w")
+    print(f"  input image : {h}h X {w}w")
     print(f"  output      : [B={B}, N={N} tokens, D={D} dim]")
     print(f"  hidden_size : {encoder.hidden_size}")
-    assert D == encoder.hidden_size, "hidden_size mismatch!"
+    assert encoder.hidden_size == D, "hidden_size mismatch!"
     return N, D
 
 
@@ -141,7 +140,7 @@ def main():
     device = torch.device(args.device)
     img_shape = tuple(args.img_shape)
 
-    print(f"\nDevice: {device} | Image shape: {img_shape[0]}h × {img_shape[1]}w")
+    print(f"\nDevice: {device} | Image shape: {img_shape[0]}h X {img_shape[1]}w")
 
     encoder = DonutVisionEncoder(device=device, img_shape=img_shape, freeze=True)
 

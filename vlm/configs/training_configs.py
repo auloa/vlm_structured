@@ -2,7 +2,6 @@ from collections.abc import Callable
 
 from vlm.configs.training_schema import TrainingConfig
 
-
 ConfigFactory = Callable[[], TrainingConfig]
 TRAINING_CONFIGS: dict[str, ConfigFactory] = {}
 
@@ -117,7 +116,8 @@ def receipt_base(name: str) -> TrainingConfig:
 
 
 
-def get_experiment(name: str) -> TrainingConfig:
+def get_training_config(name: str) -> TrainingConfig:
+    name = name.replace("-", "_").replace(" ", "_")
     try:
         return TRAINING_CONFIGS[name]()
     except KeyError as exc:
